@@ -1,0 +1,17 @@
+# Phase 2B.4 reproduction — Python 3.12
+#
+# PyTorch is intentionally not pinned here: install the correct CUDA wheel for
+# the host first (see documentation/assumptions.md).  For CUDA 12.8:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0
+transformers==5.22.1
+tokenizers==0.23.3
+safetensors==0.8.0
+huggingface_hub==2.4.0
+numpy==2.5.4
+pandas==3.1.0
+scikit-learn==1.9.1
+nltk==3.10.4
+tqdm==4.70.1
+bitsandbytes==0.50.2
+pytest==9.2.0

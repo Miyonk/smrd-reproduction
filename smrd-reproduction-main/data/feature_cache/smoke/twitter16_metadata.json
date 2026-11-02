@@ -1,0 +1,87 @@
+{
+  "dataset": "twitter16",
+  "roberta_model": "roberta-base",
+  "max_seq_len": 512,
+  "hidden_size": 768,
+  "dtype": "float16",
+  "lengths": [
+    21,
+    30,
+    18,
+    15,
+    17,
+    14,
+    17,
+    18
+  ],
+  "offsets": [
+    0,
+    21,
+    51,
+    69,
+    84,
+    101,
+    115,
+    132
+  ],
+  "labels": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+  ],
+  "tweet_ids": [
+    "498430783699554305",
+    "500378223977721856",
+    "524922729485848576",
+    "524923462398513152",
+    "524923676484177920",
+    "524925050739490816",
+    "524925215235911680",
+    "524925987239120897"
+  ],
+  "events": [
+    "twitter_rumors",
+    "twitter_rumors",
+    "twitter_rumors",
+    "twitter_rumors",
+    "twitter_rumors",
+    "twitter_rumors",
+    "twitter_rumors",
+    "twitter_rumors"
+  ],
+  "texts": [
+    "witness : police allegedly stop mike brown yell walk sidewalk . #ferguson url",
+    "oh . #ferguson police chief say cop know robbery stop #mikebrown . kid \" jaywalk \" ? b !",
+    "photo tweet . cpr perform soldier . hear four shot . #ottawa url",
+    "shot fire parliament hill man walk gun . lock security office parliament hill",
+    "break - shoot parliament hill . rcmp weapon draw #cdnpoli url",
+    "break news : soldier shoot national war memorial ottawa url",
+    "#breaking news : shot fire parliament hill . follow develop story : url url",
+    "soldier shoot national war memorial ottawa url #cdnpoli #hw"
+  ],
+  "text_sha256": "5359b3583f15213c02c75c3a7c956cdd6e49dfd8bd54bc3cfcfcf6cbedaef61a",
+  "preprocessor_backend": "nltk",
+  "preprocessor_config": {
+    "max_chars": 512,
+    "remove_stopwords": true,
+    "light10": true,
+    "lemmatize": true
+  },
+  "limit": 8,
+  "row_count": 8,
+  "total_tokens": 150,
+  "versions": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.22.1",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0"
+  },
+  "created_at": "2026-11-02T20:25:39.967607+00:00"
+}

@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model checkpoints & large binaries
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+
+# Feature cache
+features/
+*.npy
+*.npz
+*.mmap
+
+# Logs & outputs
+logs/
+*.log
+results/
+
+# Archives (raw data downloads)
+*.zip
+*.tar.gz
+*.tar.bz2
+*.7z
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Agent tooling (local only)
+_archive/
+.agents/
+
+# Paper (copyright)
+*.docx
+*.pdf
+
+# Data - processed CSVs are tracked; raw is too but large splits are not
+data/splits/*_5fold.json
+data/splits/*_event_splits.json

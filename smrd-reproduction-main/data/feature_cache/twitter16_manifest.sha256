@@ -1,0 +1,17 @@
+{
+  "features_sha256": "605aa4dc624d12a55c07f7dad2f1de9718759e27645f4b5b15da9ee602b77bb8",
+  "metadata_sha256": "3ab3c852312a733232228586b8ab91175f5cf53fc72ef7af2f9ffc051bc87f9c",
+  "text_sha256": "d571cd4ce72045cac004d923849022492451bf8631f89200abd19e4eebc93026",
+  "row_count": 818,
+  "total_tokens": 16409,
+  "roberta_model": "roberta-base",
+  "preprocessor_backend": "nltk",
+  "versions": {
+    "python": "3.12.10",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.22.1",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0"
+  }
+}

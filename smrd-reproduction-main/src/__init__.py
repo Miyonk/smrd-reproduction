@@ -1,0 +1,4 @@
+"""
+Rumor Detection Research Package.
+"""
+
