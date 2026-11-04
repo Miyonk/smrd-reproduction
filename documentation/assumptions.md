@@ -6,8 +6,10 @@ This file records every place where the implementation had to choose a concrete
 mechanism, and every deviation forced by the available hardware. Each item is
 labelled with the design-document assumption ID where one exists.
 
-Status: implementation complete; local gates measured on an RTX 3050 Laptop
-(6 GiB). Real DHOA searches are intended for a Colab T4 (16 GiB).
+Status: Codebase implementation complete; pipeline blocker resolved
+(TextPreprocessor restored and verified). Hardware validation gates and DHOA
+searches have NOT yet been run on disk (no gate logs exist yet). Real DHOA
+searches are intended for a Colab T4 (16 GiB).
 
 ---
 
