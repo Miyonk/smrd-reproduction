@@ -535,13 +535,29 @@ def run_pilot(config: Config) -> Dict:
     return {"search": search_result, "retrain": retrain_result}
 
 
-def run_all(config: Config) -> List[Dict]:
+def run_all(config: Config, resume: bool = False) -> List[Dict]:
     results = []
     for arm, dataset in PRIORITY_ORDER:
+        final_path = LOG_DIR / f"final_{arm}_{dataset}.json"
+        if resume and final_path.exists():
+            LOGGER.info(
+                "=== %s / %s already completed on disk (%s) -> preserving result & skipping search/retrain ===",
+                arm,
+                dataset,
+                final_path.name,
+            )
+            try:
+                results.append(json.loads(final_path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+            continue
+
         cfg = config.with_overrides(task_arm=arm, dataset_name=dataset)
         LOGGER.info("=== %s / %s ===", arm, dataset)
         search(cfg)
         results.append(retrain(cfg))
+
+    build_report()
     return results
 
 
@@ -661,6 +677,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("all", help="all nine arm/dataset combinations")
     common(p)
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip arm/dataset combinations where final_{arm}_{dataset}.json already exists on disk",
+    )
 
     p = sub.add_parser("report", help="build comparison tables")
     common(p)
@@ -705,7 +726,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif args.command == "pilot":
         print(json.dumps(run_pilot(config), indent=2, default=str))
     elif args.command == "all":
-        print(json.dumps(run_all(config), indent=2, default=str))
+        print(json.dumps(run_all(config, resume=args.resume), indent=2, default=str))
     elif args.command == "report":
         print(json.dumps(build_report(), indent=2, default=str))
     elif args.command == "smoke":

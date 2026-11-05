@@ -206,7 +206,11 @@ class Config:
 
     def with_overrides(self, **overrides: Any) -> "Config":
         data = self.to_dict()
-        data.update({k: v for k, v in overrides.items() if v is not None})
+        new_arm = overrides.get("task_arm")
+        if new_arm is not None and new_arm != self.task_arm and "d_out" not in overrides:
+            data["d_out"] = None
+        for k, v in overrides.items():
+            data[k] = v
         return Config.from_dict(data)
 
     @property
