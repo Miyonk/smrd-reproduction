@@ -272,8 +272,7 @@ def _train_once(
     stats = {
         "B_phys_used": b_phys,
         "gradient_checkpointing": gradient_checkpointing,
-        "train_loss_epoch1": epoch_losses[0] if epoch_losses else None,
-        "train_loss_epoch2": epoch_losses[1] if len(epoch_losses) > 1 else None,
+        **{f"train_loss_epoch{i+1}": epoch_losses[i] for i in range(len(epoch_losses))},
         "val_loss": last_metrics["loss"],
         "val_accuracy": last_metrics["accuracy"],
         "val_macro_f1": last_metrics["macro_f1"],

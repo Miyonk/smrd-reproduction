@@ -98,10 +98,10 @@ class Config:
     num_deer: int = 6
     num_iterations: int = 5
     eval_budget: int = 36
-    candidate_epochs: int = 2
+    candidate_epochs: int = 10
 
     # --- Training ---------------------------------------------------------
-    B_phys_max: int = 4
+    B_phys_max: int = 32
     grad_clip_norm: float = 1.0
     amp_dtype: str = "auto"  # auto | bfloat16 | float16 | float32
     use_8bit_optimizer: bool = False
