@@ -100,32 +100,107 @@ PHASE_2B.4_IMPLEMENTATION_TECHNICAL_DESIGN.md
 
 ---
 
-## Execution Guide
+## How to Run
 
+### System Requirements
+- **Python:** 3.12+
+- **GPU:** NVIDIA GPU with $\ge 7.0$ GiB usable VRAM (e.g. Google Colab T4/L4/A100 or local RTX 3080/4080/5090). A local 6 GiB card (e.g. RTX 3050 Laptop) can run preprocessing, feature caching, and smoke tests, but full DHOA search requires a T4-class GPU.
+
+---
+
+### Method 1: Google Colab (Recommended)
+
+1. Open [Google Colab](https://colab.research.google.com/) and upload `notebooks/colab_runner.ipynb` (or open it directly from your GitHub repository).
+2. Set runtime type to GPU:
+   - Go to **Runtime** → **Change runtime type** → select **T4 GPU** (or better) → **Save**.
+3. In Colab, clone the repository if not already cloned:
+   ```python
+   !git clone https://github.com/Miyonk/smrd-reproduction.git
+   %cd smrd-reproduction
+   ```
+4. Run the notebook cells in order:
+   - **Cell 1 (Dependencies):** Installs exact pinned requirements and checks GPU.
+   - **Cell 2 (Data):** Sets project path and downloads NLTK corpora.
+   - **Cell 3 (Hardware Probe):** Runs `python -m src.run probe` (verifies $\ge 7$ GiB VRAM).
+   - **Cell 4 (Feature Caching & Master):** Runs `cache --all-datasets` and builds master seed checkpoint.
+   - **Cell 5 (Gates):** Runs preflight P1–P4 and hardware gates G1–G6.
+   - **Cell 6 (Pilot):** Runs Arm B on Twitter16 (36 DHOA evaluations + 1 final retrain).
+   - **Cell 7 (Full Matrix & Reports):** Runs all nine arm $\times$ dataset combinations and builds final headline tables.
+
+---
+
+### Method 2: Local / GPU Workstation
+
+#### 1. Setup Environment
+**Windows (PowerShell):**
 ```powershell
-# 1. Environment probe & preflight
+powershell -ExecutionPolicy Bypass -File scripts/setup_windows.ps1
+.\.venv\Scripts\Activate.ps1
+```
+
+**Linux / macOS:**
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip wheel setuptools
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install -r requirements.txt
+python -c "import nltk; [nltk.download(p, quiet=True) for p in ('stopwords','wordnet','omw-1.4','punkt')]"
+```
+
+#### 2. End-to-End Execution Sequence
+```bash
+# Step 1: Probe hardware and preflight checks
 python -m src.run probe
 python -m src.run preflight
 
-# 2. Extract RoBERTa feature caches (offline FP16)
-python -m src.run cache --dataset twitter16
+# Step 2: Build RoBERTa feature caches (FP16 memmap arrays)
 python -m src.run cache --all-datasets
 
-# 3. Create master initial checkpoint (seed=100)
+# Step 3: Build master initial checkpoint (seed=100)
 python -m src.run master
 
-# 4. Run hardware validation gates
+# Step 4: Run hardware validation gates (G1-G6)
 python -m src.run gates --include-stress
 
-# 5. Run Pilot (Arm B on Twitter16: 36 evaluations + 1 retrain)
+# Step 5: Run Pilot (Arm B on Twitter16: 36 evaluations + 1 retrain)
 python -m src.run pilot
 
-# 6. Run all nine arm x dataset combinations
+# Step 6: Run all nine combinations
 python -m src.run all
 
-# 7. Generate comparison reports and discrepancy analysis
+# Step 7: Compile headline comparison report & discrepancy analysis
 python -m src.run report
 ```
+
+---
+
+### Resuming & Individual Task Arms
+
+- **Resume an interrupted run:**
+  ```bash
+  # Skips any arm/dataset combinations that already completed on disk:
+  python -m src.run all --resume
+  ```
+
+- **Run an individual arm on a specific dataset:**
+  ```bash
+  # Run DHOA search (36 evaluations):
+  python -m src.run search --arm arm_a --dataset twitter16
+
+  # Retrain winning candidate on train split and evaluate on test:
+  python -m src.run retrain --arm arm_a --dataset twitter16
+  ```
+
+- **Run post-matrix sensitivity check (Twitter16 extended epochs):**
+  ```bash
+  python scripts/check_twitter_collapse_sensitivity.py --epochs 10
+  ```
+
+- **Run fast smoke test (CPU / local laptop):**
+  ```bash
+  python -m src.run smoke
+  ```
 
 ---
 
