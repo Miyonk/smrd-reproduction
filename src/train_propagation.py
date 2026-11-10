@@ -212,6 +212,7 @@ def run_propagation(
     model: Optional[PropagationClassifier] = None,
     graph_meta: Optional[Dict] = None,
     keep_checkpoints: bool = False,
+    split_source: Optional[str] = None,
     _stop_after_epoch: Optional[int] = None,
 ) -> Dict:
     """Train, early-stop on val macro-F1, evaluate test once, save the artifact."""
@@ -427,7 +428,8 @@ def run_propagation(
         "arm": cfg.arm,
         "class_names": view.class_names,
         "split": {
-            "source": f"data/splits/{cfg.dataset}_train_val_test.json (seed 42)",
+            "source": split_source
+            or f"data/splits/{cfg.dataset}_train_val_test.json (seed 42)",
             "train": len(view.train_indices),
             "val": len(view.val_indices),
             "test": len(view.test_indices),

@@ -82,6 +82,33 @@ python -m src.run_propagation train --dataset twitter16 --arm graph  --seeds 42 
 python -m src.run_propagation train --dataset twitter16 --arm fusion --seeds 42 43 44
 ```
 
+Stage 2 results on the seed-42 split (full test accuracy, 3 seeds): BiGCN
+0.868 / 0.817 / 0.863 and fusion 0.829 / 0.758 / 0.877 on Twitter16 / Twitter15 /
+PHEME; structure-only logistic regression 0.409 / 0.362 / 0.522.
+
+## Evaluation protocol: grouped 5-fold cross-validation (branch `cv-eval`)
+
+The seed-42 test sets hold 164 / 298 / 1,285 tweets, so accuracy carries a sampling
+error of about ±3 / ±2.3 / ±1.1 points — as large as the gaps between arms, and not
+captured by the seed-to-seed std. The validation sets (82 / 149 tweets) are too small
+to tune against. Arm comparisons and any later tuning use cross-validation instead:
+
+- `data/splits/<dataset>_cv5_grouped.json`: 5 folds, stratified by label, with
+  near-duplicate clusters as groups (no test tweet has a near-copy in train/val).
+- Fold *k* tests, fold *k+1* validates (model selection only), the rest trains.
+- One run per fold; arms are compared on the pooled predictions (Wilson interval,
+  paired accuracy difference, exact McNemar test).
+- PHEME node vocabulary is re-selected per fold from training threads
+  (`data/graphs/pheme_graphs_fullvocab.json.gz` + `restrict_vocab`).
+
+```bash
+python -m src.run_cv make-folds --all-datasets     # only to rebuild the fold files
+python -m src.run_cv train --dataset twitter16 --arm text|graph|fusion --ckpt-root <dir>
+python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
+```
+
+Colab runner: `notebooks/colab_cv.ipynb`.
+
 ---
 
 ## Design Document

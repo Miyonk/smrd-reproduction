@@ -90,11 +90,11 @@ def build_twitter(dataset: str, rvnn_dir: Path) -> Dict:
     return {"rows": len(ids), **info}
 
 
-def build_pheme(tar_path: Path) -> Dict:
+def build_pheme(tar_path: Path, threads: Optional[Dict] = None) -> Dict:
     df = load_dataset("pheme")
     ids = df["tweet_id"].astype(str).tolist()
     view = _view("pheme", DEFAULT_TASK["pheme"], df)
-    threads = read_pheme_threads(tar_path, ids)
+    threads = threads or read_pheme_threads(tar_path, ids)
     no_source = [t for t in ids if threads[t]["source"] is None]
     if no_source:
         raise ValueError(f"{len(no_source)} PHEME threads without a source tweet, e.g. {no_source[:3]}")
@@ -122,7 +122,33 @@ def build_pheme(tar_path: Path) -> Dict:
         "vocab": vocab,
     }
     write_cache("pheme", trees, meta)
-    return {"rows": len(ids), **meta["build_info"]}
+    full = build_pheme_fullvocab(ids, threads)
+    return {"rows": len(ids), **meta["build_info"], "fullvocab": full}
+
+
+def build_pheme_fullvocab(ids: List[str], threads: Dict) -> Dict:
+    """Second PHEME cache keeping every word seen in >= 2 tweets (alphabetical
+    ids).  Cross-validation picks the top-5000 per fold from training threads
+    with ``restrict_vocab``, so no fixed split is baked into the features."""
+    docs = []
+    for t in ids:
+        docs.append(tokenize_bow(threads[t]["source"]))
+        docs.extend(tokenize_bow(r["text"]) for r in threads[t]["replies"].values())
+    vocab = sorted(build_vocab(docs, size=10**9, min_df=2))
+    index = {w: k for k, w in enumerate(vocab)}
+    trees = {t: pheme_tree(t, threads[t], index)[0] for t in ids}
+    meta = {
+        "source": "PHEME all-rnr-annotated-threads (structure.json + reactions)",
+        "feature_note": (
+            "bag-of-words over ALL words with document frequency >= 2 (no selection); "
+            "select a training-only vocabulary with src.propagation.restrict_vocab"
+        ),
+        "n_features": len(vocab),
+        "vocab": vocab,
+    }
+    path = write_cache("pheme", trees, meta, cache_path("pheme", "fullvocab"))
+    return {"vocab_size": len(vocab), "cache": str(path.relative_to(ROOT)),
+            "cache_mb": round(path.stat().st_size / 1e6, 2)}
 
 
 def cmd_build(datasets: List[str], rvnn_dir: Optional[str], pheme_tar: Optional[str]) -> Dict:

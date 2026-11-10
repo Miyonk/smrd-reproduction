@@ -96,14 +96,14 @@ class TreeGraph:
         }
 
     @classmethod
-    def from_json(cls, d: Mapping) -> "TreeGraph":
+    def from_json(cls, d: Mapping, n_features: int = N_FEATURES) -> "TreeGraph":
         g = cls(
             parent=np.asarray(d["parent"], dtype=np.int64),
             offsets=np.asarray(d["offsets"], dtype=np.int64),
             words=np.asarray(d["words"], dtype=np.int64),
             counts=np.asarray(d["counts"], dtype=np.float32),
         )
-        g.validate()
+        g.validate(n_features)
         return g
 
     def validate(self, n_features: int = N_FEATURES) -> None:
@@ -126,7 +126,10 @@ Bag = List[Tuple[int, float]]
 
 
 def build_tree(
-    root: Hashable, parent_of: Mapping[Hashable, Optional[Hashable]], bags: Mapping[Hashable, Bag]
+    root: Hashable,
+    parent_of: Mapping[Hashable, Optional[Hashable]],
+    bags: Mapping[Hashable, Bag],
+    n_features: int = N_FEATURES,
 ) -> Tuple[TreeGraph, int]:
     """BFS-order a tree.  Nodes whose parent is unknown (or unreachable from the
     root, e.g. a cycle) are attached to the root; returns ``(tree, n_reattached)``."""
@@ -164,7 +167,7 @@ def build_tree(
         words=np.asarray(words, dtype=np.int64),
         counts=np.asarray(counts, dtype=np.float32),
     )
-    tree.validate()
+    tree.validate(n_features)
     return tree, len(rest)
 
 
@@ -311,15 +314,18 @@ def pheme_tree(thread_id: str, th: Dict, index: Mapping[str, int]) -> Tuple[Tree
             contracted += 1
         parent_of[node] = p if p in texts else thread_id
     bags = {node: bag_of_words(tokenize_bow(t), index) for node, t in texts.items()}
-    tree, reattached = build_tree(thread_id, parent_of, bags)
+    tree, reattached = build_tree(thread_id, parent_of, bags, max(N_FEATURES, len(index)))
     return tree, {"contracted_hops": contracted, "reattached_nodes": reattached}
 
 
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
-def cache_path(dataset: str) -> Path:
-    return CACHE_DIR / f"{dataset}_graphs.json.gz"
+def cache_path(dataset: str, variant: Optional[str] = None) -> Path:
+    """``variant="fullvocab"`` is the PHEME cache that keeps every word, for
+    per-fold vocabulary selection (see :func:`restrict_vocab`)."""
+    suffix = f"_{variant}" if variant else ""
+    return CACHE_DIR / f"{dataset}_graphs{suffix}.json.gz"
 
 
 def write_cache(dataset: str, trees: Mapping[str, TreeGraph], meta: Dict, path: Optional[Path] = None) -> Path:
@@ -348,9 +354,14 @@ def file_sha256(path: Path | str) -> str:
     return h.hexdigest()
 
 
-def load_graphs(dataset: str, tweet_ids: Sequence[str], path: Optional[Path] = None) -> Tuple[List[TreeGraph], Dict]:
+def load_graphs(
+    dataset: str,
+    tweet_ids: Sequence[str],
+    path: Optional[Path] = None,
+    variant: Optional[str] = None,
+) -> Tuple[List[TreeGraph], Dict]:
     """Trees aligned with ``tweet_ids`` (dataframe row order) plus cache metadata."""
-    path = Path(path or cache_path(dataset))
+    path = Path(path or cache_path(dataset, variant))
     if not path.exists():
         raise FileNotFoundError(
             f"{path} not found; build it with `python -m src.run_propagation build-graphs`"
@@ -363,10 +374,48 @@ def load_graphs(dataset: str, tweet_ids: Sequence[str], path: Optional[Path] = N
     missing = [t for t in tweet_ids if str(t) not in trees]
     if missing:
         raise ValueError(f"{len(missing)} rows have no tree in {path}, e.g. {missing[:3]}")
-    graphs = [TreeGraph.from_json(trees[str(t)]) for t in tweet_ids]
+    n_features = int(payload["n_features"])
+    graphs = [TreeGraph.from_json(trees[str(t)], n_features) for t in tweet_ids]
     meta = {k: v for k, v in payload.items() if k not in ("trees", "vocab")}
     meta["sha256"] = file_sha256(path)
     return graphs, meta
+
+
+def restrict_vocab(
+    graphs: Sequence[TreeGraph],
+    train_rows: Sequence[int],
+    size: int = N_FEATURES,
+    min_df: int = 2,
+) -> Tuple[List[TreeGraph], Dict]:
+    """Re-index every tree onto the top ``size`` words by node-level document
+    frequency over ``train_rows`` only (ties broken by word id); other words
+    are dropped.  Used per cross-validation fold so that no validation/test
+    thread influences the vocabulary."""
+    n_words = 1 + max((int(g.words.max()) for g in graphs if len(g.words)), default=0)
+    df = np.zeros(n_words, dtype=np.int64)
+    for i in train_rows:
+        # a word occurs at most once per node bag, so bincount is document frequency
+        df += np.bincount(graphs[i].words, minlength=n_words)
+    order = np.lexsort((np.arange(n_words), -df))
+    chosen = [int(w) for w in order[:size] if df[w] >= min_df]
+    remap = np.full(n_words, -1, dtype=np.int64)
+    remap[chosen] = np.arange(len(chosen))
+    out = []
+    for g in graphs:
+        n = g.n_nodes
+        node_of_entry = np.repeat(np.arange(n), np.diff(np.append(g.offsets, len(g.words))))
+        new = remap[g.words] if len(g.words) else g.words
+        keep = new >= 0
+        per_node = np.bincount(node_of_entry[keep], minlength=n)
+        tree = TreeGraph(
+            parent=g.parent,
+            offsets=np.concatenate([[0], np.cumsum(per_node)[:-1]]).astype(np.int64),
+            words=new[keep].astype(np.int64),
+            counts=g.counts[keep],
+        )
+        tree.validate(size)
+        out.append(tree)
+    return out, {"vocab_size": len(chosen), "train_threads": len(train_rows), "min_df": min_df}
 
 
 def graph_stats(graphs: Sequence[TreeGraph], labels: Sequence[int]) -> Dict:
