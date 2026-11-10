@@ -413,7 +413,7 @@ def run_finetune(
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"non-finite loss at epoch {epoch}")
                 scaler.scale(loss * (len(part) / len(batch))).backward()
-                running += float(loss) * len(part)
+                running += loss.detach().item() * len(part)
                 seen += len(part)
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
