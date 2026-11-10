@@ -52,6 +52,36 @@ Outputs: `<ckpt-root>/<run>/seed<k>/{result.json, artifact/}` and
 `results/stage1/*.json`. Re-running a command resumes unfinished seeds from their
 last epoch and skips finished ones.
 
+Stage 1 results (Colab L4, seeds 42/43/44, full test / dedup-clean test accuracy):
+Twitter16 0.799 ± 0.006 / 0.771, Twitter15 0.732 ± 0.017 / 0.707,
+PHEME 0.868 ± 0.005 / 0.861.
+
+## Redesign — Stage 2: propagation trees (branch `stage2-propagation`)
+
+| File | Role |
+|---|---|
+| `src/propagation.py` | Tree parsing, BFS-ordered `TreeGraph`, cache I/O, batching. |
+| `src/propagation_model.py` | BiGCN (top-down + bottom-up GCN, root feature enhancement, DropEdge) in plain PyTorch; `fusion` = `[RoBERTa ; BiGCN] → linear`. |
+| `src/train_propagation.py` | Training with the same rules as stage 1 (val macro-F1 selection, single test evaluation, resume-safe). |
+| `src/run_propagation.py` | CLI: `build-graphs`, `stats` (tree stats + structure-only shortcut check), `train --arm graph|fusion`. |
+| `data/graphs/*_graphs.json.gz` | Committed tree caches (~4 MB), so Colab needs no archives. |
+| `notebooks/colab_stage2.ipynb` | Colab runner. |
+
+Node features: Twitter15/16 use the public RvNN bag-of-words release
+([Rumor_RvNN `resource/`](https://github.com/majingCUHK/Rumor_RvNN)), the input
+published BiGCN results use (its vocabulary covers all threads, test included).
+PHEME uses reply threads from the PHEME archive with a 5,000-word vocabulary built
+from training threads only; reply nodes with no tweet JSON are contracted.
+
+```bash
+# only needed to rebuild the caches (archives in _archive/, RvNN files in _archive/rvnn/)
+python -m src.run_propagation build-graphs --all-datasets \
+    --rvnn-dir _archive/rvnn --pheme-tar _archive/PHEME_veracity.tar.bz2
+python -m src.run_propagation stats --all-datasets
+python -m src.run_propagation train --dataset twitter16 --arm graph  --seeds 42 43 44
+python -m src.run_propagation train --dataset twitter16 --arm fusion --seeds 42 43 44
+```
+
 ---
 
 ## Design Document
