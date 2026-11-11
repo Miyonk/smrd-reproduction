@@ -5,10 +5,14 @@ CLI for grouped 5-fold cross-validation of the three arms (see ``src/cv.py``).
     python -m src.run_cv train --dataset twitter16 --arm text   --ckpt-root <dir>
     python -m src.run_cv train --dataset twitter16 --arm graph  --ckpt-root <dir>
     python -m src.run_cv train --dataset twitter16 --arm fusion --ckpt-root <dir>
+    python -m src.run_cv train --dataset twitter16 --arm lexical --ckpt-root <dir>   # CPU
+    python -m src.run_cv stack --dataset twitter16 --members lexical graph --ckpt-root <dir>
     python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 
-Arms are the stage 1 / stage 2 models with their default settings, unchanged:
-``text`` (RoBERTa on the source tweet), ``graph`` (BiGCN), ``fusion``.
+Arms: ``text`` (RoBERTa on the source tweet), ``graph`` (BiGCN) and ``fusion``
+are the stage 1 / stage 2 models with their default settings, unchanged;
+``lexical`` is TF-IDF + logistic regression (``src/lexical.py``); ``stack`` is a
+validation-weighted average of other arms' probabilities (``src/stack.py``).
 One run per fold, seed ``base_seed + fold``.  Fold runs live in
 ``<ckpt-root>/<dataset>_<task>_<arm>/fold<k>/`` and resume like any other run.
 """
@@ -25,6 +29,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -37,8 +43,17 @@ LOGGER = logging.getLogger("smrd.cv")
 RESULTS_DIR = ROOT / "results" / "cv"
 DEFAULT_CKPT_ROOT = ROOT / "checkpoints" / "cv"
 CV_ARMS = ("text", "graph", "fusion")
-# stage 3 arms (src/run_tune.py): compared with their untuned arm once all folds exist
-TUNED_ARMS = {"graph_gwo": "graph", "fusion_gwo": "fusion"}
+TRAIN_ARMS = CV_ARMS + ("lexical",)
+NEURAL_ARMS = CV_ARMS
+# Optional arms, reported once started, and the arms each is paired against.
+# *_gwo: stage 3 (src/run_tune.py).
+OPTIONAL_ARMS = {
+    "graph_gwo": ("graph",),
+    "fusion_gwo": ("fusion",),
+    "lexical": ("graph", "text"),
+    "stack": ("lexical", "graph"),
+}
+TUNED_ARMS = ("graph_gwo", "fusion_gwo")
 TASK_TO_ARM = {"4way": "arm_a", "binary": "arm_b"}
 DEFAULT_TASK = {"twitter15": "4way", "twitter16": "4way", "pheme": "binary"}
 # PHEME node features are re-selected per fold from training threads
@@ -79,7 +94,6 @@ def cmd_make_folds(datasets: List[str]) -> Dict:
 # ---------------------------------------------------------------------------
 def cmd_train(args) -> Dict:
     from src.encoder_preprocess import normalize_tweet
-    from src.finetune import FinetuneConfig, run_finetune
 
     dataset, arm = args.dataset, args.arm
     task = DEFAULT_TASK[dataset]
@@ -90,14 +104,21 @@ def cmd_train(args) -> Dict:
     folds.check_no_group_leak()
     run_dir = _run_dir(args.ckpt_root, dataset, task, arm, args.tag)
 
-    graphs = meta = None
+    graphs = meta = bags = None
+    texts = [normalize_tweet(t) for t in df["raw_text"].astype(str).tolist()]
     if arm != "text":
         from src.propagation import load_graphs, restrict_vocab
-        from src.train_propagation import ARM_DEFAULTS, PropagationConfig, run_propagation
 
         variant = "fullvocab" if dataset in FOLD_VOCAB_DATASETS else None
         graphs, meta = load_graphs(dataset, ids, variant=variant)
-        texts = [normalize_tweet(t) for t in df["raw_text"].astype(str).tolist()]
+    if arm == "lexical":
+        from src.lexical import LexicalConfig, run_lexical, thread_bags
+
+        bags = thread_bags(graphs)  # idf is fitted per fold, on training rows
+    elif arm == "text":
+        from src.finetune import FinetuneConfig, run_finetune
+    else:
+        from src.train_propagation import ARM_DEFAULTS, PropagationConfig, run_propagation
 
     done = []
     for fold in args.folds:
@@ -113,6 +134,9 @@ def cmd_train(args) -> Dict:
             if args.max_epochs:
                 cfg.max_epochs = args.max_epochs
             result = run_finetune(cfg, ckpt_dir, device=args.device, df=df, view=view, split_source=source)
+        elif arm == "lexical":
+            cfg = LexicalConfig(dataset=dataset, task=task, graph_cache_sha256=meta["sha256"])
+            result = run_lexical(cfg, ckpt_dir, df=df, view=view, texts=texts, bags=bags, split_source=source)
         else:
             fold_graphs, fold_meta = graphs, dict(meta)
             if dataset in FOLD_VOCAB_DATASETS:
@@ -147,6 +171,170 @@ def cmd_train(args) -> Dict:
 
 
 # ---------------------------------------------------------------------------
+def _neural_probs(arm: str, artifact_dir: Path, parts: Dict[str, List[int]], texts, graphs, device) -> Dict:
+    """Class probabilities of a trained neural arm for the given rows."""
+    import torch
+
+    from src.finetune import _chunks, _tokenize, resolve_device
+
+    dev = resolve_device(device)
+    if arm == "text":
+        from src.encoder_model import load_artifact
+
+        model, tokenizer, cfg = load_artifact(artifact_dir, dev)
+        max_len = int(cfg["max_len"])
+
+        def forward(rows):
+            return model(*_tokenize(tokenizer, [texts[i] for i in rows], max_len, dev))
+    else:
+        from src.propagation import collate_graphs
+        from src.propagation_model import load_artifact
+
+        model, tokenizer, cfg = load_artifact(artifact_dir, dev)
+        max_len = int(cfg["model_config"]["max_len"])
+
+        def forward(rows):
+            g = collate_graphs([graphs[i] for i in rows]).to(dev)
+            if model.text_encoder is None:
+                return model(g)
+            return model(g, *_tokenize(tokenizer, [texts[i] for i in rows], max_len, dev))
+
+    model.eval()
+    out = {}
+    with torch.no_grad():
+        for name, rows in parts.items():
+            probs = [torch.softmax(forward(chunk).float(), dim=-1).cpu() for chunk in _chunks(rows, 64)]
+            out[name] = torch.cat(probs).numpy()
+    return out
+
+
+def ensure_probs(ckpt_root, dataset, task, arm, fold, folds, view, texts, graphs, device) -> Path:
+    """``probs.json`` (validation + test probabilities) for one member fold;
+    neural arms are re-scored from their saved model if the file is missing."""
+    from src.lexical import PROBS_FILE, write_probs
+
+    fold_dir = _run_dir(ckpt_root, dataset, task, arm, None) / f"fold{fold}"
+    result_path, probs_path = fold_dir / "result.json", fold_dir / PROBS_FILE
+    if not result_path.exists():
+        raise SystemExit(
+            f"{arm} fold {fold} is not trained yet ({result_path} missing); run\n"
+            f"  python -m src.run_cv train --dataset {dataset} --arm {arm} --ckpt-root {ckpt_root}"
+        )
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if result["split"]["source"] != folds.split_source(fold):
+        raise RuntimeError(f"{result_path} was produced with a different fold definition")
+    if probs_path.exists():
+        return probs_path
+    if arm not in NEURAL_ARMS:
+        raise SystemExit(f"{probs_path} is missing; retrain {arm} with --fresh")
+    artifact = fold_dir / "artifact"
+    if not artifact.exists():
+        raise SystemExit(f"{artifact} is missing, so {arm} fold {fold} cannot be re-scored; retrain it with --fresh")
+    fold_graphs = graphs
+    if arm != "text" and dataset in FOLD_VOCAB_DATASETS:
+        from src.propagation import restrict_vocab
+
+        fold_graphs, _ = restrict_vocab(graphs, view.train_indices)
+    LOGGER.info("scoring %s fold %d from %s", arm, fold, artifact)
+    parts = {"val": view.val_indices, "test": view.test_indices}
+    probs = _neural_probs(arm, artifact, parts, texts, fold_graphs, device)
+    # the saved model must reproduce the test predictions it reported
+    saved = {p["row"]: p["pred"] for p in result["test_predictions"]}
+    now = dict(zip(view.test_indices, probs["test"].argmax(1).tolist()))
+    changed = sum(saved[i] != now.get(i) for i in saved)
+    if set(saved) != set(now) or changed > 0.02 * len(saved):
+        raise RuntimeError(
+            f"{artifact} does not reproduce the test predictions in {result_path} "
+            f"({changed} of {len(saved)} differ)"
+        )
+    if changed:
+        LOGGER.warning("%s fold %d: %d of %d test predictions differ from the training run "
+                       "(numerical precision)", arm, fold, changed, len(saved))
+    write_probs(probs_path, {k: (parts[k], probs[k]) for k in parts})
+    return probs_path
+
+
+def cmd_stack(args) -> Dict:
+    from datetime import datetime, timezone
+
+    from src.encoder_preprocess import normalize_tweet
+    from src.evaluate import test_report
+    from src.stack import choose_weights, combine, read_probs
+
+    dataset, members = args.dataset, list(args.members)
+    if len(members) < 2 or len(set(members)) != len(members):
+        raise SystemExit("--members needs at least two different arms")
+    task = DEFAULT_TASK[dataset]
+    df = load_dataset(dataset)
+    ids = df["tweet_id"].astype(str).tolist()
+    base = _base_view(dataset, task, df)
+    folds = Folds.load(dataset, ids)
+    run_dir = _run_dir(args.ckpt_root, dataset, task, "stack", args.tag)
+    config = {"members": members, "weight_steps": 10, "selection": "validation macro-F1"}
+    texts = [normalize_tweet(t) for t in df["raw_text"].astype(str).tolist()]
+    graphs = None
+    if any(m in ("graph", "fusion") for m in members):
+        from src.propagation import load_graphs
+
+        graphs, _ = load_graphs(dataset, ids, variant="fullvocab" if dataset in FOLD_VOCAB_DATASETS else None)
+
+    done = []
+    for fold in args.folds:
+        view = folds.view(base, fold)
+        fold_dir = run_dir / f"fold{fold}"
+        if args.fresh and fold_dir.exists():
+            shutil.rmtree(fold_dir)
+        result_path = fold_dir / "result.json"
+        if result_path.exists():
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            if result["config"] != config or result["split"]["source"] != folds.split_source(fold):
+                raise RuntimeError(f"{result_path} holds a different stack; use --tag or --fresh")
+        else:
+            val_p, test_p = [], []
+            for m in members:
+                path = ensure_probs(args.ckpt_root, dataset, task, m, fold, folds, view, texts, graphs, args.device)
+                v, t = read_probs(path, view.val_indices, view.test_indices, base.n_classes)
+                val_p.append(v)
+                test_p.append(t)
+            chosen = choose_weights(val_p, view.val_labels, base.n_classes, config["weight_steps"])
+            probs = combine(test_p, chosen["weights"])  # test rows, once, with fixed weights
+            preds = probs.argmax(1).tolist()
+            y_test = view.test_labels
+            result = {
+                "config": config,
+                "dataset": dataset,
+                "task": task,
+                "arm": "stack",
+                "class_names": base.class_names,
+                "split": {"source": folds.split_source(fold), "train": len(view.train_indices),
+                          "val": len(view.val_indices), "test": len(view.test_indices)},
+                "weights": dict(zip(members, chosen["weights"])),
+                "selection": chosen,
+                "member_test_accuracy": {
+                    m: float((p.argmax(1) == np.array(y_test)).mean()) for m, p in zip(members, test_p)
+                },
+                "epochs_run": 0,
+                "best_epoch": 0,
+                "best_val_macro_f1": chosen["val_macro_f1"],
+                "test_full": test_report(y_test, preds, base.n_classes, base.class_names),
+                "test_predictions": [
+                    {"row": int(i), "tweet_id": ids[i], "label": int(y), "pred": int(p), "confidence": float(max(pr))}
+                    for i, y, p, pr in zip(view.test_indices, y_test, preds, probs.tolist())
+                ],
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _write(result_path, result)
+        done.append({
+            "fold": fold,
+            "weights": result["weights"],
+            "member_test_accuracy": {m: round(a, 4) for m, a in result["member_test_accuracy"].items()},
+            "test_accuracy": round(result["test_full"]["accuracy"], 4),
+            "test_macro_f1": round(result["test_full"]["macro_f1"], 4),
+        })
+    return {"run": run_dir.name, "folds": done}
+
+
+# ---------------------------------------------------------------------------
 def load_arm_results(
     ckpt_root: str, dataset: str, task: str, arm: str, folds: Folds, tag: Optional[str] = None
 ) -> Optional[List[Dict]]:
@@ -164,7 +352,7 @@ def load_arm_results(
 
 
 def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -> Dict:
-    from src.finetune import test_report
+    from src.evaluate import test_report
 
     task = DEFAULT_TASK[dataset]
     df = load_dataset(dataset)
@@ -173,11 +361,11 @@ def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -
     expected = sorted(base.labels)
 
     arms, correct, missing = {}, {}, []
-    for arm in CV_ARMS + tuple(TUNED_ARMS):
+    for arm in CV_ARMS + tuple(OPTIONAL_ARMS):
         tag = tuned_tag if arm in TUNED_ARMS else None
         results = load_arm_results(ckpt_root, dataset, task, arm, folds, tag)
         if results is None:
-            # a tuned arm is optional: report it only once it has been started
+            # an optional arm is reported only once it has been started
             if arm in CV_ARMS or _run_dir(ckpt_root, dataset, task, arm, tag).exists():
                 missing.append(arm)
             continue
@@ -199,9 +387,10 @@ def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -
         f"{a}_minus_{b}": paired_difference(correct[a], correct[b])
         for a, b in itertools.combinations(reversed([x for x in CV_ARMS if x in arms]), 2)
     }
-    for tuned, plain in TUNED_ARMS.items():
-        if tuned in arms and plain in arms:
-            pairs[f"{tuned}_minus_{plain}"] = paired_difference(correct[tuned], correct[plain])
+    for arm, others in OPTIONAL_ARMS.items():
+        for other in others:
+            if arm in arms and other in arms:
+                pairs[f"{arm}_minus_{other}"] = paired_difference(correct[arm], correct[other])
     majority = max(set(base.labels.values()), key=list(base.labels.values()).count)
     out = {
         "dataset": dataset,
@@ -253,10 +442,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("train", help="train one arm on the requested folds")
     p.add_argument("--dataset", choices=DATASETS, required=True)
-    p.add_argument("--arm", choices=CV_ARMS, required=True)
+    p.add_argument("--arm", choices=TRAIN_ARMS, required=True)
     p.add_argument("--folds", type=int, nargs="+", default=list(range(5)))
     p.add_argument("--base-seed", type=int, default=42)
     p.add_argument("--max-epochs", type=int, default=None, help="override, e.g. 1 for a smoke run (use --tag)")
+    p.add_argument("--device", default=None)
+    p.add_argument("--ckpt-root", default=str(DEFAULT_CKPT_ROOT))
+    p.add_argument("--tag", default=None)
+    p.add_argument("--fresh", action="store_true")
+
+    p = sub.add_parser("stack", help="validation-weighted average of trained arms")
+    p.add_argument("--dataset", choices=DATASETS, required=True)
+    p.add_argument("--members", nargs="+", default=["lexical", "graph"], choices=TRAIN_ARMS)
+    p.add_argument("--folds", type=int, nargs="+", default=list(range(5)))
     p.add_argument("--device", default=None)
     p.add_argument("--ckpt-root", default=str(DEFAULT_CKPT_ROOT))
     p.add_argument("--tag", default=None)
@@ -288,6 +486,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.max_epochs and not args.tag:
             raise SystemExit("--max-epochs changes the protocol; pass --tag so it gets its own directory")
         print(json.dumps(cmd_train(args), indent=2))
+    elif args.command == "stack":
+        if args.members != ["lexical", "graph"] and not args.tag:
+            raise SystemExit("a non-default member list needs --tag so it gets its own directory")
+        print(json.dumps(cmd_stack(args), indent=2))
     else:
         for ds in _datasets(args):
             print(format_comparison(cmd_compare(ds, args.ckpt_root, args.tuned_tag)))

@@ -192,3 +192,28 @@ def summarize_binary(
     ci_low, ci_high = wilson_ci(correct, len(y_true))
     metrics["wilson_ci_95"] = [ci_low, ci_high]
     return metrics
+
+
+def test_report(
+    y_true: Sequence[int], y_pred: Sequence[int], n_classes: int, class_names: Sequence[str]
+) -> Dict:
+    """Accuracy, per-class/macro F1, confusion matrix and Wilson 95% CI."""
+    y_true = [int(y) for y in y_true]
+    y_pred = [int(y) for y in y_pred]
+    metrics = classification_metrics(y_true, y_pred, n_classes)
+    correct = sum(a == b for a, b in zip(y_true, y_pred))
+    low, high = wilson_ci(correct, len(y_true))
+    for entry in metrics["per_class"]:
+        entry["name"] = class_names[entry["class"]]
+    return {
+        "n": len(y_true),
+        "correct": correct,
+        "accuracy": metrics["accuracy"],
+        "accuracy_wilson_95": [low, high],
+        "macro_f1": metrics["macro_f1"],
+        "macro_precision": metrics["macro_precision"],
+        "macro_recall": metrics["macro_recall"],
+        "per_class": metrics["per_class"],
+        "confusion_matrix": metrics["confusion_matrix"],
+        "class_names": list(class_names),
+    }

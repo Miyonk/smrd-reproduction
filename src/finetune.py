@@ -42,7 +42,7 @@ from src.config import Config, ROOT, replace_file
 from src.data import ArmView, build_arm_view, load_dataset
 from src.encoder_model import SourceTextClassifier, save_artifact
 from src.encoder_preprocess import normalize_tweet, normalizer_config
-from src.evaluate import classification_metrics, wilson_ci
+from src.evaluate import classification_metrics, test_report, wilson_ci
 
 LOGGER = logging.getLogger(__name__)
 
@@ -184,31 +184,6 @@ def compute_class_weights(labels: Sequence[int], n_classes: int, mode: str) -> O
             return None
     weights = counts.sum() / (n_classes * np.maximum(counts, 1.0))
     return torch.tensor(weights, dtype=torch.float32)
-
-
-def test_report(
-    y_true: Sequence[int], y_pred: Sequence[int], n_classes: int, class_names: Sequence[str]
-) -> Dict:
-    """Accuracy, per-class/macro F1, confusion matrix and Wilson 95% CI."""
-    y_true = [int(y) for y in y_true]
-    y_pred = [int(y) for y in y_pred]
-    metrics = classification_metrics(y_true, y_pred, n_classes)
-    correct = sum(a == b for a, b in zip(y_true, y_pred))
-    low, high = wilson_ci(correct, len(y_true))
-    for entry in metrics["per_class"]:
-        entry["name"] = class_names[entry["class"]]
-    return {
-        "n": len(y_true),
-        "correct": correct,
-        "accuracy": metrics["accuracy"],
-        "accuracy_wilson_95": [low, high],
-        "macro_f1": metrics["macro_f1"],
-        "macro_precision": metrics["macro_precision"],
-        "macro_recall": metrics["macro_recall"],
-        "per_class": metrics["per_class"],
-        "confusion_matrix": metrics["confusion_matrix"],
-        "class_names": list(class_names),
-    }
 
 
 # ---------------------------------------------------------------------------

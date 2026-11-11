@@ -159,6 +159,29 @@ Result on Twitter16 (Colab, 5 folds): tuned BiGCN 0.806 [0.777, 0.831] against
 only the tuned model gets right, 18 only the untuned one). The stage 2 settings are
 already as good as the search can find, so the search was not run on the other datasets.
 
+## Lexical arm and stacked arm (branch `lexical-stack`)
+
+| File | Role |
+|---|---|
+| `src/lexical.py` | `lexical` arm: TF-IDF of the source tweet (word 1–2-grams, character 2–5-grams) and of all words in the thread, logistic regression. CPU only. |
+| `src/stack.py` | `stack` arm: weighted average of member arms' class probabilities. |
+| `notebooks/colab_lexical.ipynb` | Colab runner (no GPU needed). |
+
+Same folds and rules as the other arms. The validation fold is never trained on: it
+selects the lexical model's `C` and the stack's weights (grid on the simplex, macro-F1),
+and each test fold is predicted once. Neural members are re-scored from their saved
+models to obtain validation and test probabilities.
+
+```bash
+python -m src.run_cv train --dataset twitter16 --arm lexical --ckpt-root <dir>
+python -m src.run_cv stack --dataset twitter16 --members lexical graph --ckpt-root <dir>
+python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
+```
+
+Lexical arm, pooled accuracy on the 5 folds (local CPU run, scikit-learn 1.5):
+Twitter16 0.848, Twitter15 0.840, PHEME 0.871 — above BiGCN (0.804 / 0.797 / 0.858)
+on all three.
+
 ---
 
 ## Design Document
