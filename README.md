@@ -154,6 +154,11 @@ python -m src.run_tune search --dataset twitter16 --arm graph --ckpt-root <dir>
 python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 ```
 
+Result on Twitter16 (Colab, 5 folds): tuned BiGCN 0.806 [0.777, 0.831] against
+0.804 untuned; paired difference +0.1 points [−1.3, +1.6], McNemar p = 1.0 (19 tweets
+only the tuned model gets right, 18 only the untuned one). The stage 2 settings are
+already as good as the search can find, so the search was not run on the other datasets.
+
 ---
 
 ## Design Document
