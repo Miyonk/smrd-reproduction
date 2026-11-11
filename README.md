@@ -130,8 +130,8 @@ Propagation trees help clearly on Twitter15/16 and not on PHEME. Fusion is not
 distinguishable from BiGCN on Twitter (the 4–6 point gap on the seed-42 split was
 mostly noise) and is slightly better than BiGCN on PHEME. Twitter16 text accuracy
 is 11 points below its seed-42 value (0.799): that split had near-copies of 16.5%
-of its test tweets in training, and these folds have none. No arm is anywhere near
-the paper's 99%.
+of its test tweets in training, and these folds have none. The best arm so far is
+BiGCN on Twitter15/16 (about 0.80) and fusion on PHEME (0.87).
 
 ## Redesign — Stage 3: GWO hyperparameter search (branch `stage3-gwo`)
 
@@ -141,8 +141,8 @@ the paper's 99%.
 | `src/run_tune.py` | Nested search: for each test fold, candidates are scored on the other four folds only; the best one is trained and tested once on the usual fold view. |
 | `notebooks/colab_stage3.ipynb` | Colab runner. |
 
-Budget per test fold: 6 wolves × (1 + 5 rounds) = 36 candidates (the budget the
-DHOA search has in this repository), wolf 0 starting at the stage 2 settings.
+Budget per test fold: 6 wolves × (1 + 5 rounds) = 36 candidates, wolf 0 starting
+at the stage 2 settings.
 Fitness = mean validation macro-F1 over two training runs with different inner
 validation folds. Searched for BiGCN: learning rate, weight decay, hidden and output
 width, dropout, DropEdge rate, label smoothing, batch size. The tuned arm is written

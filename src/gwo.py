@@ -9,9 +9,8 @@ position as long as the fitness values it depends on are the same.  The caller
 can therefore make a search resumable just by caching ``evaluate`` results by
 index (``src/run_tune.py`` does this).
 
-Budget: ``population * (rounds + 1)`` evaluations.  The default 6 wolves and
-5 update rounds give 36 evaluations, the same budget the paper's DHOA search
-gets in this repository.
+Budget: ``population * (rounds + 1)`` evaluations (36 with the default
+6 wolves and 5 update rounds).
 """
 
 from __future__ import annotations
