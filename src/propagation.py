@@ -339,8 +339,9 @@ def write_cache(dataset: str, trees: Mapping[str, TreeGraph], meta: Dict, path: 
         "trees": {tid: t.to_json() for tid, t in trees.items()},
     }
     tmp = path.with_suffix(".tmp")
-    # mtime=0 keeps the gzip bytes (and so the sha256) reproducible
-    with open(tmp, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as fh:
+    # mtime=0 and an empty header filename keep the gzip bytes (and so the
+    # sha256) reproducible, whatever the output file is called
+    with open(tmp, "wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as fh:
         fh.write(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     replace_file(tmp, path)
     return path
