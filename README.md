@@ -109,6 +109,51 @@ python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 
 Colab runner: `notebooks/colab_cv.ipynb`.
 
+Results (Colab L4, pooled accuracy over all tweets, Wilson 95% interval):
+
+| | Twitter16 (n=818) | Twitter15 (n=1,490) | PHEME binary (n=6,425) |
+|---|---|---|---|
+| majority class | 0.253 | 0.251 | 0.626 |
+| text (RoBERTa) | 0.688 [0.656, 0.719] | 0.736 [0.713, 0.757] | 0.867 [0.858, 0.875] |
+| graph (BiGCN) | 0.804 [0.776, 0.830] | 0.797 [0.776, 0.817] | 0.858 [0.849, 0.866] |
+| fusion | 0.786 [0.757, 0.813] | 0.781 [0.759, 0.801] | 0.871 [0.863, 0.879] |
+
+Paired differences (points, 95% interval, exact McNemar p):
+
+| | Twitter16 | Twitter15 | PHEME |
+|---|---|---|---|
+| graph − text | +11.6 [+8.3, +15.0], p<0.0001 | +6.2 [+3.8, +8.6], p<0.0001 | −0.9 [−1.8, +0.0], p=0.058 |
+| fusion − graph | −1.8 [−4.6, +0.9], p=0.22 | −1.7 [−3.8, +0.5], p=0.14 | +1.3 [+0.5, +2.2], p=0.002 |
+| fusion − text | +9.8 [+7.0, +12.5], p<0.0001 | +4.5 [+2.6, +6.4], p<0.0001 | +0.5 [−0.2, +1.1], p=0.16 |
+
+Propagation trees help clearly on Twitter15/16 and not on PHEME. Fusion is not
+distinguishable from BiGCN on Twitter (the 4–6 point gap on the seed-42 split was
+mostly noise) and is slightly better than BiGCN on PHEME. Twitter16 text accuracy
+is 11 points below its seed-42 value (0.799): that split had near-copies of 16.5%
+of its test tweets in training, and these folds have none. No arm is anywhere near
+the paper's 99%.
+
+## Redesign — Stage 3: GWO hyperparameter search (branch `stage3-gwo`)
+
+| File | Role |
+|---|---|
+| `src/gwo.py` | Grey Wolf Optimizer over the unit cube (maximising, deterministic per seed) and the search spaces. |
+| `src/run_tune.py` | Nested search: for each test fold, candidates are scored on the other four folds only; the best one is trained and tested once on the usual fold view. |
+| `notebooks/colab_stage3.ipynb` | Colab runner. |
+
+Budget per test fold: 6 wolves × (1 + 5 rounds) = 36 candidates (the budget the
+DHOA search has in this repository), wolf 0 starting at the stage 2 settings.
+Fitness = mean validation macro-F1 over two training runs with different inner
+validation folds. Searched for BiGCN: learning rate, weight decay, hidden and output
+width, dropout, DropEdge rate, label smoothing, batch size. The tuned arm is written
+as `<arm>_gwo` next to the untuned arm, same rows and seed per fold, and
+`run_cv compare` adds the paired `graph_gwo − graph` line.
+
+```bash
+python -m src.run_tune search --dataset twitter16 --arm graph --ckpt-root <dir>
+python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
+```
+
 ---
 
 ## Design Document

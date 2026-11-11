@@ -37,6 +37,8 @@ LOGGER = logging.getLogger("smrd.cv")
 RESULTS_DIR = ROOT / "results" / "cv"
 DEFAULT_CKPT_ROOT = ROOT / "checkpoints" / "cv"
 CV_ARMS = ("text", "graph", "fusion")
+# stage 3 arms (src/run_tune.py): compared with their untuned arm once all folds exist
+TUNED_ARMS = {"graph_gwo": "graph", "fusion_gwo": "fusion"}
 TASK_TO_ARM = {"4way": "arm_a", "binary": "arm_b"}
 DEFAULT_TASK = {"twitter15": "4way", "twitter16": "4way", "pheme": "binary"}
 # PHEME node features are re-selected per fold from training threads
@@ -145,11 +147,13 @@ def cmd_train(args) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-def load_arm_results(ckpt_root: str, dataset: str, task: str, arm: str, folds: Folds) -> Optional[List[Dict]]:
+def load_arm_results(
+    ckpt_root: str, dataset: str, task: str, arm: str, folds: Folds, tag: Optional[str] = None
+) -> Optional[List[Dict]]:
     """All fold results for an arm, or ``None`` if any fold is unfinished."""
     results = []
     for fold in range(folds.n_folds):
-        path = _run_dir(ckpt_root, dataset, task, arm, None) / f"fold{fold}" / "result.json"
+        path = _run_dir(ckpt_root, dataset, task, arm, tag) / f"fold{fold}" / "result.json"
         if not path.exists():
             return None
         r = json.loads(path.read_text(encoding="utf-8"))
@@ -159,7 +163,7 @@ def load_arm_results(ckpt_root: str, dataset: str, task: str, arm: str, folds: F
     return results
 
 
-def cmd_compare(dataset: str, ckpt_root: str) -> Dict:
+def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -> Dict:
     from src.finetune import test_report
 
     task = DEFAULT_TASK[dataset]
@@ -169,10 +173,13 @@ def cmd_compare(dataset: str, ckpt_root: str) -> Dict:
     expected = sorted(base.labels)
 
     arms, correct, missing = {}, {}, []
-    for arm in CV_ARMS:
-        results = load_arm_results(ckpt_root, dataset, task, arm, folds)
+    for arm in CV_ARMS + tuple(TUNED_ARMS):
+        tag = tuned_tag if arm in TUNED_ARMS else None
+        results = load_arm_results(ckpt_root, dataset, task, arm, folds, tag)
         if results is None:
-            missing.append(arm)
+            # a tuned arm is optional: report it only once it has been started
+            if arm in CV_ARMS or _run_dir(ckpt_root, dataset, task, arm, tag).exists():
+                missing.append(arm)
             continue
         rows, labels, preds = pool_fold_results(results, expected)
         pooled = test_report(labels, preds, base.n_classes, base.class_names)
@@ -192,6 +199,9 @@ def cmd_compare(dataset: str, ckpt_root: str) -> Dict:
         f"{a}_minus_{b}": paired_difference(correct[a], correct[b])
         for a, b in itertools.combinations(reversed([x for x in CV_ARMS if x in arms]), 2)
     }
+    for tuned, plain in TUNED_ARMS.items():
+        if tuned in arms and plain in arms:
+            pairs[f"{tuned}_minus_{plain}"] = paired_difference(correct[tuned], correct[plain])
     majority = max(set(base.labels.values()), key=list(base.labels.values()).count)
     out = {
         "dataset": dataset,
@@ -214,7 +224,7 @@ def format_comparison(out: Dict) -> str:
     for arm, a in out["arms"].items():
         lo, hi = a["pooled"]["accuracy_wilson_95"]
         lines.append(
-            f"{arm:<7} acc {a['pooled']['accuracy']:.3f} [{lo:.3f}, {hi:.3f}]  "
+            f"{arm:<10} acc {a['pooled']['accuracy']:.3f} [{lo:.3f}, {hi:.3f}]  "
             f"macroF1 {a['pooled']['macro_f1']:.3f}  per-fold acc {a['fold_accuracy_mean']:.3f}"
             f"±{a['fold_accuracy_std']:.3f}"
         )
@@ -256,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dataset", choices=DATASETS)
     p.add_argument("--all-datasets", action="store_true")
     p.add_argument("--ckpt-root", default=str(DEFAULT_CKPT_ROOT))
+    p.add_argument("--tuned-tag", default=None, help="tag of the stage 3 runs to include, if they used one")
     return parser
 
 
@@ -279,7 +290,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(cmd_train(args), indent=2))
     else:
         for ds in _datasets(args):
-            print(format_comparison(cmd_compare(ds, args.ckpt_root)))
+            print(format_comparison(cmd_compare(ds, args.ckpt_root, args.tuned_tag)))
     return 0
 
 

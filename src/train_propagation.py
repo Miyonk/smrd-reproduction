@@ -213,6 +213,7 @@ def run_propagation(
     graph_meta: Optional[Dict] = None,
     keep_checkpoints: bool = False,
     split_source: Optional[str] = None,
+    save_model: bool = True,
     _stop_after_epoch: Optional[int] = None,
 ) -> Dict:
     """Train, early-stop on val macro-F1, evaluate test once, save the artifact."""
@@ -403,23 +404,24 @@ def run_propagation(
         )
 
     artifact_dir = ckpt_dir / "artifact"
-    save_artifact(
-        model,
-        tokenizer,
-        artifact_dir,
-        model_config=cfg.model_config(),
-        class_names=view.class_names,
-        extra={
-            "dataset": cfg.dataset,
-            "task": cfg.task,
-            "best_epoch": stopper.best_epoch,
-            "best_val_macro_f1": stopper.best,
-            "training_config": cfg.to_dict(),
-            "graph_cache": graph_meta,
-            "git_commit": _git_commit(),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    if save_model:  # hyperparameter-search fits only need the scores
+        save_artifact(
+            model,
+            tokenizer,
+            artifact_dir,
+            model_config=cfg.model_config(),
+            class_names=view.class_names,
+            extra={
+                "dataset": cfg.dataset,
+                "task": cfg.task,
+                "best_epoch": stopper.best_epoch,
+                "best_val_macro_f1": stopper.best,
+                "training_config": cfg.to_dict(),
+                "graph_cache": graph_meta,
+                "git_commit": _git_commit(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     result = {
         "config": cfg.to_dict(),
@@ -456,7 +458,7 @@ def run_propagation(
             }
             for i, p, pr in zip(view.test_indices, test["predictions"], test["probabilities"])
         ],
-        "artifact": str(artifact_dir),
+        "artifact": str(artifact_dir) if save_model else None,
         "git_commit": _git_commit(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }

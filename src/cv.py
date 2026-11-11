@@ -132,6 +132,18 @@ class Folds:
         train = keep([i for i, f in enumerate(self.fold_of_row) if f not in (fold, val_fold)])
         return dataclasses.replace(base, train_indices=train, val_indices=val, test_indices=test)
 
+    def inner_view(self, base: ArmView, held_out_fold: int, val_fold: int) -> ArmView:
+        """A view for hyperparameter search inside outer fold ``held_out_fold``:
+        that fold's rows appear nowhere.  ``val_fold`` validates, the other
+        folds train; the test slot repeats the validation rows so a training
+        run has something to score without touching the held-out fold."""
+        if held_out_fold == val_fold or not all(0 <= f < self.n_folds for f in (held_out_fold, val_fold)):
+            raise ValueError("held-out and validation folds must be different valid folds")
+        keep = lambda rows: [i for i in rows if i in base.labels]
+        val = keep(self.rows(val_fold))
+        train = keep([i for i, f in enumerate(self.fold_of_row) if f not in (held_out_fold, val_fold)])
+        return dataclasses.replace(base, train_indices=train, val_indices=val, test_indices=list(val))
+
     def split_source(self, fold: int) -> str:
         return (
             f"{folds_path(self.dataset).name} fold {fold} "
