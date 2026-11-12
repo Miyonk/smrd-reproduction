@@ -60,7 +60,7 @@ The sections below follow the order the work was done in; each names its branch.
 Paper-ready tables, the method description and related work are in
 [`paper/results_and_methods.md`](paper/results_and_methods.md).
 
-The repository started as an implementation of a published GPT-2-based model; that
+The repository started as an implementation of a GPT-2-based model from an earlier manuscript; that
 code is still here and is described under [Legacy pipeline](#legacy-pipeline-gpt-2--dhoa).
 Its status table:
 

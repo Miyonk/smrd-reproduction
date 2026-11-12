@@ -18,6 +18,12 @@ The base paper's pipeline has four stages: text pre-processing, RoBERTa feature
 extraction, a GPT classifier, and hyperparameter optimisation with the Deer Hunting
 Optimization Algorithm (DHOA). Each stage is changed here.
 
+The base paper is an unpublished manuscript that a journal returned. It is the starting
+point of this work, not a published result: its reported accuracy is not a baseline
+the new paper has to match or explain, and the stage-by-stage mapping below is a working
+aid, not text for the paper. The paper's baselines are the published models and
+protocols in section 1.1.
+
 ### 0.1 What is changed, stage by stage
 
 | Stage | Base paper | This work | What the experiments show |
@@ -66,13 +72,13 @@ configuration was run together.
 
 ### 0.4 Two points to settle with the mentor
 
-1. **The base paper reports 99.1–99.5% accuracy; this pipeline scores 0.84–0.87.** A
-   reviewer will ask why a modified version scores lower. The answer the evidence
-   supports is the evaluation protocol: the base paper does not describe its split or
-   validation procedure, while here near-duplicate tweets are kept out of training and
-   a separate validation fold is used. Section 1.1 lists published work showing that
-   scores on these benchmarks drop sharply once such leakage is removed. The paper
-   cannot claim to improve on the base paper's reported accuracy.
+1. **How the new paper relates to the returned manuscript.** The base paper's
+   99.1–99.5% accuracy was never published, so the new paper does not need to cite or
+   explain it. Reviewers will compare the scores (0.85–0.88) with published results on
+   the same benchmarks, many of which are higher because they were measured on random
+   splits; section 1.1 lists the published work showing that such scores drop sharply
+   once leakage is removed. To settle: why the manuscript was returned (reviewer
+   comments, if any), and whether the new paper is a revision of it by the same authors.
 2. **The strongest component is the simplest one.** The lexical branch does most of
    the work. The full pipeline adds about one point over it on Twitter15 and PHEME
    (significant) and nothing on Twitter16; that gain comes from the RoBERTa branch,
