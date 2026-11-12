@@ -77,8 +77,8 @@ configuration was run together.
    explain it. Reviewers will compare the scores (0.85–0.88) with published results on
    the same benchmarks, many of which are higher because they were measured on random
    splits; section 1.1 lists the published work showing that such scores drop sharply
-   once leakage is removed. To settle: why the manuscript was returned (reviewer
-   comments, if any), and whether the new paper is a revision of it by the same authors.
+   once leakage is removed. The new paper is a revision of the manuscript by the same
+   authors. To settle: why it was returned (reviewer comments, if any).
 2. **The strongest component is the simplest one.** The lexical branch does most of
    the work. The full pipeline adds about one point over it on Twitter15 and PHEME
    (significant) and nothing on Twitter16; that gain comes from the RoBERTa branch,
