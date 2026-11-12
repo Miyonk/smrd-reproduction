@@ -23,11 +23,11 @@ Optimization Algorithm (DHOA). Each stage is changed here.
 | Stage | Base paper | This work | What the experiments show |
 |---|---|---|---|
 | Pre-processing | URL removal, stop-word removal, tokenisation, stemming, lemmatisation | Minimal normalisation only (URLs → `URL`, mentions → `@USER`), so the pretrained encoder sees natural text | — |
-| Text representation | RoBERTa embeddings used as features | RoBERTa fine-tuned end to end on the source tweet | Needs up to 30 epochs on the small Twitter sets: 0.688 → 0.784 on Twitter16 |
+| Text representation | RoBERTa embeddings used as features | RoBERTa fine-tuned end to end on the source tweet | Needs up to 30 epochs on the small Twitter sets: 0.688 → 0.784 on Twitter16, 0.736 → 0.770 on Twitter15; no change on PHEME (0.867 → 0.868) |
 | Classifier | GPT (self-attention) on the RoBERTa features | Linear head on RoBERTa; the GPT stage is removed | — |
 | Propagation (new) | Not used | BiGCN branch on the reply tree | 0.804 / 0.797 / 0.858; above RoBERTa on Twitter15/16 |
 | Lexical (new) | Not used | TF-IDF of source tweet and thread words, logistic regression | 0.848 / 0.840 / 0.871; the strongest single branch |
-| Combination (new) | — | Validation-weighted average of the branches' probabilities (stacking); joint fusion as an alternative | Lexical + RoBERTa 0.856 on Twitter16; not significantly above lexical alone |
+| Combination (new) | — | Validation-weighted average of the branches' probabilities (stacking); joint fusion as an alternative | Three-branch stack against the lexical branch alone: −0.2 / +1.1 / +0.8 points; significant on Twitter15 and PHEME (section 4.7) |
 | Hyperparameter search | DHOA over learning rate, batch size, layers, heads, dropout | Grey Wolf Optimizer, nested inside cross-validation so the test fold is never used for tuning | No gain on Twitter16 (+0.1 points, p = 1.0) |
 | Evaluation | Split and validation procedure not described | Grouped 5-fold cross-validation with a separate validation fold, paired significance tests, and a story-held-out split | Section 4 |
 
@@ -41,9 +41,10 @@ Three branches trained on the same folds, then combined:
 4. **Combination** — the three branches' class probabilities are averaged with weights
    chosen on the validation fold (`stack_full`).
 
-The three-branch combination scores 0.846 on Twitter16, level with the lexical branch
-alone (0.848; −0.2 points, p = 0.88), and 0.852 on Twitter15, above the lexical branch
-(0.840; +1.1 points, p = 0.021). See section 4.7. It has not been run on PHEME
+The three-branch combination scores 0.846 / 0.852 / 0.879 on Twitter16 / Twitter15 /
+PHEME. Against the lexical branch alone (0.848 / 0.840 / 0.871) that is −0.2 points
+(p = 0.88), +1.1 points (p = 0.021) and +0.8 points (p = 0.0059). It is better than the
+text branch and the propagation branch alone on all three datasets. See section 4.7
 (`notebooks/colab_full_pipeline.ipynb`).
 
 ### 0.3 Ablation: what each component contributes (grouped folds, pooled accuracy)
@@ -51,16 +52,16 @@ alone (0.848; −0.2 points, p = 0.88), and 0.852 on Twitter15, above the lexica
 | Configuration | Twitter16 | Twitter15 | PHEME |
 |---|---|---|---|
 | Text branch alone, 6 epochs | 0.688 | 0.736 | 0.867 |
-| Text branch alone, ≤ 30 epochs | 0.784 | 0.770 | not run |
+| Text branch alone, ≤ 30 epochs | 0.784 | 0.770 | 0.868 |
 | Propagation branch alone | 0.804 | 0.797 | 0.858 |
 | Propagation branch + GWO search | 0.806 | not run | not run |
 | Text + propagation, joint fusion | 0.786 | 0.781 | 0.871 |
 | Lexical branch alone | 0.848 | 0.840 | 0.871 |
 | Lexical + propagation, stacked | 0.840 | 0.844 | 0.872 |
-| Lexical + text (≤ 30 epochs), stacked | 0.856 | 0.844 | not run |
-| All three branches, stacked (proposed) | 0.846 | 0.852 | not run |
+| Lexical + text (≤ 30 epochs), stacked | 0.856 | 0.844 | 0.880 |
+| All three branches, stacked (proposed) | 0.846 | 0.852 | 0.879 |
 
-The Twitter columns mix two sets of runs; section 4.7 gives the set in which every
+The table mixes two sets of runs; section 4.7 gives the set in which every
 configuration was run together.
 
 ### 0.4 Two points to settle with the mentor
@@ -73,8 +74,10 @@ configuration was run together.
    scores on these benchmarks drop sharply once such leakage is removed. The paper
    cannot claim to improve on the base paper's reported accuracy.
 2. **The strongest component is the simplest one.** The lexical branch does most of
-   the work, and the added branches give no statistically significant gain over it. The
-   ablation table has to show that as it is.
+   the work. The full pipeline adds about one point over it on Twitter15 and PHEME
+   (significant) and nothing on Twitter16; that gain comes from the RoBERTa branch,
+   and the BiGCN branch has no consistent effect. The ablation table has to show that
+   as it is.
 
 ---
 
@@ -117,7 +120,7 @@ the evaluation gives four results that the papers above cover only partly:
    report with 182 released events (29–44%).
 4. **Negative results for common additions.** Grey Wolf Optimizer tuning of BiGCN
    (+0.1 points, p = 1.0), joint RoBERTa + BiGCN fusion (not better than BiGCN on
-   Twitter), and probability stacking (no significant gain in any of four cases).
+   Twitter), and stacking BiGCN on the lexical branch (no gain on any dataset).
 
 Points 1, 3 and 4 are the parts least covered by the papers above. Point 2 is a
 confirmation with a stricter statistical treatment.
@@ -128,12 +131,10 @@ confirmation with a stricter statistical treatment.
 
 | Item | Why it matters | Cost |
 |---|---|---|
-| All three branches stacked (`stack_full`) on PHEME | Run on Twitter15 and Twitter16 only (section 4.7) | GPU: `notebooks/colab_full_pipeline.ipynb` |
-| Choose the final configuration without the test folds | The three-branch stack is best on Twitter15 and the two-branch stack on Twitter16; picking per dataset from test accuracy would bias the headline number. The validation scores stored with each stack can make the choice | Read the stored validation scores |
+| Report the stacking weights | The mean weight each branch receives per dataset shows how much the pipeline relies on each; stored in every stack fold's `result.json` | Read from Drive, no GPU |
 | BiGCN and RoBERTa on the story-held-out folds | Only the lexical arm has story-held-out numbers; the comparison is the core table | GPU: `notebooks/colab_story.ipynb` |
 | Event ids for Twitter15/16 | Wu and Hooi use released event ids (298 / 182 events). Folds built from them would replace the text clustering and make results directly comparable | Find and check the released ids; CPU |
 | More than one seed per fold | Each fold has one training run, so run-to-run variation of the neural arms is not measured | GPU |
-| `text_long` on Twitter15 and PHEME | Only Twitter16 has the longer-trained RoBERTa | GPU |
 | Verify the related-work numbers | Read from HTML conversions | Reading |
 
 ---
@@ -227,13 +228,17 @@ interval. Two arms are compared on the same tweets with the paired accuracy diff
 |---|---|---|---|
 | Majority class | 0.253 | 0.251 | 0.626 |
 | Text, 6 epochs | 0.688 [0.656, 0.719] · 0.684 | 0.736 [0.713, 0.757] · 0.736 | 0.867 [0.858, 0.875] · 0.859 |
-| Text, ≤ 30 epochs | 0.784 [0.754, 0.810] · 0.782 | not run | not run |
+| Text, ≤ 30 epochs | 0.784 [0.754, 0.810] · 0.782 | 0.770 [0.748, 0.790] · 0.770 | 0.868 [0.860, 0.876] · 0.860 |
 | Graph (BiGCN) | 0.804 [0.776, 0.830] · 0.805 | 0.797 [0.776, 0.817] · 0.798 | 0.858 [0.849, 0.866] · 0.850 |
 | Graph + GWO search | 0.806 [0.777, 0.831] · 0.805 | not run | not run |
 | Fusion | 0.786 [0.757, 0.813] · 0.783 | 0.781 [0.759, 0.801] · 0.780 | 0.871 [0.863, 0.879] · 0.864 |
 | **Lexical** | **0.848 [0.822, 0.871] · 0.849** | **0.840 [0.821, 0.858] · 0.841** | **0.871 [0.862, 0.878] · 0.862** |
 | Stack: lexical + graph | 0.840 [0.813, 0.863] · 0.840 | 0.844 [0.824, 0.861] · 0.844 | 0.872 [0.863, 0.880] · 0.863 |
-| Stack: lexical + text ≤ 30 | 0.856 [0.830, 0.878] · 0.856 | not run | not run |
+| Stack: lexical + text ≤ 30 | 0.856 [0.830, 0.878] · 0.856 | 0.844 [0.824, 0.861] · 0.844 | 0.880 [0.872, 0.888] · 0.873 |
+| Stack: all three branches | 0.846 [0.820, 0.869] · 0.847 | 0.852 [0.833, 0.869] · 0.852 | 0.879 [0.871, 0.887] · 0.871 |
+
+The rows with ≤ 30 epochs and the three-branch stack come from the set of runs in
+section 4.7, where the lexical branch scored the same and BiGCN within 0.7 points.
 
 ### 4.2 Paired comparisons on the grouped folds
 
@@ -248,8 +253,9 @@ arm classifies correctly; exact McNemar p.
 | Fusion − graph | −1.8 [−4.6, +0.9]; 57 / 72; p = 0.22 | −1.7 [−3.8, +0.5]; 119 / 144; p = 0.14 | +1.3 [+0.5, +2.2]; 417 / 331; p = 0.002 |
 | Stack (lex. + graph) − lexical | −0.9 [−1.8, +0.1]; 4 / 11; p = 0.12 | +0.3 [−0.0, +0.7]; 6 / 1; p = 0.13 | +0.1 [−0.2, +0.4]; 49 / 42; p = 0.53 |
 | GWO graph − graph | +0.1 [−1.3, +1.6]; 19 / 18; p = 1.0 | not run | not run |
-| Text ≤ 30 ep. − lexical | −6.5 [−9.2, −3.7]; 41 / 94; p < 0.0001 | not run | not run |
-| Stack (lex. + text ≤ 30) − lexical | +0.7 [−0.7, +2.2]; 22 / 16; p = 0.42 | not run | not run |
+| Text ≤ 30 ep. − lexical | −6.5 [−9.2, −3.7]; 41 / 94; p < 0.0001 | −7.0 [−9.1, −5.0]; 70 / 175; p < 0.0001 | −0.2 [−1.1, +0.6]; 365 / 381; p = 0.58 |
+| Stack (lex. + text ≤ 30) − lexical | +0.7 [−0.7, +2.2]; 22 / 16; p = 0.42 | +0.3 [−0.2, +0.9]; 11 / 6; p = 0.33 | +1.0 [+0.3, +1.7]; 283 / 220; p = 0.0056 |
+| Stack (all three) − lexical | −0.2 [−1.8, +1.3]; 21 / 23; p = 0.88 | +1.1 [+0.2, +2.1]; 33 / 16; p = 0.021 | +0.8 [+0.3, +1.4]; 213 / 159; p = 0.0059 |
 
 The 6-epoch and 30-epoch RoBERTa runs were made on different accounts, so they have no
 paired test; their intervals do not overlap ([0.656, 0.719] and [0.754, 0.810]).
@@ -305,48 +311,69 @@ exactly. Validation accuracy stops improving after epochs 6–9 and then stays l
 macro-F1 is 0.789 and mean test accuracy 0.783, so selecting the epoch on validation
 did not inflate the test estimate.
 
-### 4.7 Full pipeline on Twitter16 and Twitter15 (all configurations in one set of runs)
+### 4.7 Full pipeline on all three datasets (all configurations in one set of runs)
 
 Run on a second account: lexical, `text_long` and BiGCN were trained there and all
 stacks were built from those runs. Pooled accuracy [Wilson 95% interval] · macro-F1.
 
-| Configuration | Twitter16 (n = 818) | Twitter15 (n = 1,490) |
-|---|---|---|
-| Text branch (≤ 30 epochs) | 0.784 [0.754, 0.810] · 0.782 | 0.770 [0.748, 0.790] · 0.770 |
-| Propagation branch (BiGCN) | 0.811 [0.782, 0.836] · 0.810 | 0.798 [0.777, 0.818] · 0.799 |
-| Lexical branch | 0.848 [0.822, 0.871] · 0.849 | 0.840 [0.821, 0.858] · 0.841 |
-| Lexical + propagation | 0.844 [0.817, 0.867] · 0.844 | 0.840 [0.821, 0.858] · 0.841 |
-| Lexical + text | 0.856 [0.830, 0.878] · 0.856 | 0.844 [0.824, 0.861] · 0.844 |
-| All three branches | 0.846 [0.820, 0.869] · 0.847 | 0.852 [0.833, 0.869] · 0.852 |
+| Configuration | Twitter16 (n = 818) | Twitter15 (n = 1,490) | PHEME (n = 6,425) |
+|---|---|---|---|
+| Text branch (≤ 30 epochs) | 0.784 [0.754, 0.810] · 0.782 | 0.770 [0.748, 0.790] · 0.770 | 0.868 [0.860, 0.876] · 0.860 |
+| Propagation branch (BiGCN) | 0.811 [0.782, 0.836] · 0.810 | 0.798 [0.777, 0.818] · 0.799 | 0.858 [0.849, 0.867] · 0.850 |
+| Lexical branch | 0.848 [0.822, 0.871] · 0.849 | 0.840 [0.821, 0.858] · 0.841 | 0.871 [0.862, 0.878] · 0.862 |
+| Lexical + propagation | 0.844 [0.817, 0.867] · 0.844 | 0.840 [0.821, 0.858] · 0.841 | 0.872 [0.863, 0.880] · 0.863 |
+| Lexical + text | 0.856 [0.830, 0.878] · 0.856 | 0.844 [0.824, 0.861] · 0.844 | 0.880 [0.872, 0.888] · 0.873 |
+| All three branches (proposed) | 0.846 [0.820, 0.869] · 0.847 | 0.852 [0.833, 0.869] · 0.852 | 0.879 [0.871, 0.887] · 0.871 |
 
 Difference in points [95% interval]; only first / only second arm correct; McNemar p.
 
-| Comparison | Twitter16 | Twitter15 |
-|---|---|---|
-| All three − lexical | −0.2 [−1.8, +1.3]; 21 / 23; p = 0.88 | +1.1 [+0.2, +2.1]; 33 / 16; p = 0.021 |
-| All three − lexical + text | −1.0 [−1.8, −0.2]; 2 / 10; p = 0.039 | +0.8 [+0.0, +1.6]; 24 / 12; p = 0.065 |
-| All three − propagation | +3.5 [+1.5, +5.6]; 53 / 24; p = 0.0013 | +5.4 [+3.7, +7.0]; 121 / 41; p < 0.0001 |
-| All three − text | +6.2 [+4.0, +8.5]; 72 / 21; p < 0.0001 | +8.2 [+6.3, +10.0]; 164 / 42; p < 0.0001 |
-| Lexical + text − lexical | +0.7 [−0.7, +2.2]; 22 / 16; p = 0.42 | +0.3 [−0.2, +0.9]; 11 / 6; p = 0.33 |
-| Lexical + propagation − lexical | −0.5 [−1.3, +0.3]; 4 / 8; p = 0.39 | +0.0 [−0.2, +0.2]; 1 / 1; p = 1.0 |
-| Lexical − propagation | +3.8 [+1.8, +5.8]; 52 / 21; p = 0.0004 | +4.2 [+2.5, +6.0]; 121 / 58; p < 0.0001 |
-| Text − lexical | −6.5 [−9.2, −3.7]; 41 / 94; p < 0.0001 | −7.0 [−9.1, −5.0]; 70 / 175; p < 0.0001 |
-| Text − propagation | −2.7 [−5.5, +0.1]; 58 / 80; p = 0.074 | −2.8 [−5.0, −0.6]; 119 / 161; p = 0.014 |
+| Comparison | Twitter16 | Twitter15 | PHEME |
+|---|---|---|---|
+| All three − lexical | −0.2 [−1.8, +1.3]; 21 / 23; p = 0.88 | +1.1 [+0.2, +2.1]; 33 / 16; p = 0.021 | +0.8 [+0.3, +1.4]; 213 / 159; p = 0.0059 |
+| All three − lexical + text | −1.0 [−1.8, −0.2]; 2 / 10; p = 0.039 | +0.8 [+0.0, +1.6]; 24 / 12; p = 0.065 | −0.1 [−0.5, +0.2]; 76 / 85; p = 0.53 |
+| All three − propagation | +3.5 [+1.5, +5.6]; 53 / 24; p = 0.0013 | +5.4 [+3.7, +7.0]; 121 / 41; p < 0.0001 | +2.1 [+1.4, +2.8]; 323 / 190; p < 0.0001 |
+| All three − text | +6.2 [+4.0, +8.5]; 72 / 21; p < 0.0001 | +8.2 [+6.3, +10.0]; 164 / 42; p < 0.0001 | +1.1 [+0.5, +1.7]; 225 / 155; p = 0.0004 |
+| Lexical + text − lexical | +0.7 [−0.7, +2.2]; 22 / 16; p = 0.42 | +0.3 [−0.2, +0.9]; 11 / 6; p = 0.33 | +1.0 [+0.3, +1.7]; 283 / 220; p = 0.0056 |
+| Lexical + text − text | +7.2 [+4.9, +9.5]; 78 / 19; p < 0.0001 | +7.4 [+5.4, +9.3]; 169 / 59; p < 0.0001 | +1.2 [+0.8, +1.7]; 161 / 82; p < 0.0001 |
+| Lexical + propagation − lexical | −0.5 [−1.3, +0.3]; 4 / 8; p = 0.39 | +0.0 [−0.2, +0.2]; 1 / 1; p = 1.0 | +0.1 [−0.2, +0.4]; 49 / 42; p = 0.53 |
+| Lexical − propagation | +3.8 [+1.8, +5.8]; 52 / 21; p = 0.0004 | +4.2 [+2.5, +6.0]; 121 / 58; p < 0.0001 | +1.2 [+0.6, +1.9]; 282 / 203; p = 0.0004 |
+| Text − lexical | −6.5 [−9.2, −3.7]; 41 / 94; p < 0.0001 | −7.0 [−9.1, −5.0]; 70 / 175; p < 0.0001 | −0.2 [−1.1, +0.6]; 365 / 381; p = 0.58 |
+| Text − propagation | −2.7 [−5.5, +0.1]; 58 / 80; p = 0.074 | −2.8 [−5.0, −0.6]; 119 / 161; p = 0.014 | +1.0 [+0.1, +1.9]; 464 / 401; p = 0.035 |
 
-The three-branch pipeline is clearly better than the text or propagation branch alone
-on both datasets. Against the lexical branch the evidence is mixed: +1.1 points on
-Twitter15 (p = 0.021) and −0.2 points on Twitter16 (p = 0.88). Over the 2,308 tweets of
-both datasets together the pipeline is right on 54 tweets the lexical branch gets wrong
-and wrong on 39 it gets right (+0.6 points, exact McNemar p = 0.15). The Twitter15
-result is one of several comparisons made at the 0.05 level and should not be read as
-established until it holds on PHEME or over more seeds.
+**Pipeline against each single branch.** The three-branch pipeline is better than the
+text branch and the propagation branch alone on all three datasets (p ≤ 0.0013).
+Against the lexical branch it gains +1.1 points on Twitter15 (p = 0.021) and +0.8 on
+PHEME (p = 0.0059), and is level on Twitter16 (−0.2, p = 0.88). With a Holm correction
+over the three datasets the Twitter15 and PHEME results stay below 0.05 (adjusted
+p = 0.043 and 0.018). Over all 8,733 threads the pipeline is right on 267 threads the
+lexical branch gets wrong and wrong on 198 it gets right (+0.8 points, exact McNemar
+p = 0.0016); PHEME supplies 74% of those threads.
 
-The longer schedule raises the text branch on Twitter15 as well (0.736 with 6 epochs,
-0.770 with up to 30; separate runs, intervals [0.713, 0.757] and [0.748, 0.790]).
+**Which added branch carries the gain.** Lexical + text is above the lexical branch on
+all three datasets (+0.7 / +0.3 / +1.0 points) but significantly so only on PHEME
+(p = 0.0056); pooled, 316 against 242 threads (+0.8 points, p = 0.0020). Adding the
+propagation branch to lexical + text changes the result by −1.0 points on Twitter16
+(p = 0.039), +0.8 on Twitter15 (p = 0.065) and −0.1 on PHEME (p = 0.53); pooled, 102
+against 107 threads (−0.1 points, p = 0.78). Stacking the propagation branch on the
+lexical branch alone gives no gain on any dataset. The measured gain of the pipeline
+over the lexical branch therefore comes from the text branch; the propagation branch
+has no consistent effect.
 
-BiGCN scored 0.811 on Twitter16 in this set of runs and 0.804 in the first (same folds,
-same seeds, a different Colab runtime); on Twitter15 it scored 0.798 and 0.797. The
-lexical branch gave the same accuracy in both sets.
+**The three-branch stack contains the smaller configurations.** Its weight grid
+includes weight 0 for any branch, so the lexical branch alone and lexical + text are
+special cases, and its validation score is never below theirs. Choosing among the three
+by validation score therefore always returns the three-branch stack. It was fixed as
+the proposed pipeline before the Twitter15 and PHEME runs.
+
+**Longer schedule.** Up to 30 epochs raises the text branch on Twitter15 (0.736 with 6
+epochs, 0.770 with up to 30; separate runs, intervals [0.713, 0.757] and
+[0.748, 0.790]) and makes no difference on PHEME (0.867 and 0.868), where a fold has
+about eight times as many training threads as a Twitter16 fold.
+
+**Run-to-run variation.** BiGCN scored 0.811 on Twitter16 in this set of runs and 0.804
+in the first (same folds, same seeds, a different Colab runtime); on Twitter15 0.798
+and 0.797; on PHEME 0.858 in both. The lexical branch gave the same accuracy in both
+sets.
 
 ---
 
@@ -356,7 +383,10 @@ lexical branch gave the same accuracy in both sets.
 - Story-held-out results exist for the lexical arm only.
 - Twitter15/16 stories come from text clustering, not from event ids, and the result
   depends on the threshold (section 4.5).
-- `text_long`, its stack and the GWO search were run on Twitter16 only.
+- The GWO search was run on Twitter16 only.
+- The pipeline's gain over the lexical branch is about one point where it is
+  significant, the same size as the run-to-run variation seen for BiGCN (0.7 points on
+  Twitter16).
 - Twitter15 and Twitter16 node features use the public RvNN vocabulary, which was built
   from all threads including test threads.
 - The lexical runs in 4.4 and 4.5 used scikit-learn 1.5 on CPU; the grouped-fold

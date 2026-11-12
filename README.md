@@ -23,18 +23,22 @@ Pooled 5-fold accuracy. *Grouped* folds keep near-duplicate tweets in one fold;
 |---|---|---|---|---|
 | | majority class | 0.253 | 0.251 | 0.626 |
 | grouped | text (RoBERTa, 6 epochs) | 0.688 | 0.736 | 0.867 |
-| grouped | text_long (RoBERTa, ≤ 30 epochs) | 0.784 | — | — |
+| grouped | text_long (RoBERTa, ≤ 30 epochs) | 0.784 | 0.770 | 0.868 |
 | grouped | graph (BiGCN) | 0.804 | 0.797 | 0.858 |
 | grouped | fusion | 0.786 | 0.781 | 0.871 |
 | grouped | **lexical** | **0.848** | **0.840** | **0.871** |
+| grouped | lexical + text_long, stacked | 0.856 | 0.844 | 0.880 |
+| grouped | lexical + text_long + BiGCN, stacked (proposed pipeline) | 0.846 | 0.852 | 0.879 |
 | story-held-out | lexical | 0.683 | 0.686 | 0.701 |
 
 What the experiments show:
 
 1. The lexical arm beats BiGCN on all three datasets (+4.4 / +4.3 / +1.3 points,
    McNemar p ≤ 0.0003) and matches RoBERTa and fusion on PHEME.
-2. Nothing added on top of it gives a measurable gain: stacking it with BiGCN or with
-   the longer-trained RoBERTa, or tuning BiGCN with a Grey Wolf Optimizer search.
+2. The three-branch pipeline adds about one point over it on Twitter15 (+1.1,
+   p = 0.021) and PHEME (+0.8, p = 0.0059) and nothing on Twitter16 (−0.2, p = 0.88).
+   The gain comes from the longer-trained RoBERTa branch; stacking BiGCN on the
+   lexical arm, or tuning BiGCN with a Grey Wolf Optimizer search, gives none.
 3. Keeping near-duplicates out of training lowers RoBERTa on Twitter16 from 0.799
    (random split) to 0.688.
 4. On stories absent from training the lexical arm falls to about 0.68–0.70, and on
@@ -45,10 +49,12 @@ their class probabilities (`stack_full`); `notebooks/colab_full_pipeline.ipynb` 
 and combines them from scratch. On Twitter16 it scores 0.846 [0.820, 0.869], level with
 the lexical branch alone (−0.2 points, McNemar p = 0.88) and one point below lexical +
 `text_long` (0.856, p = 0.039). On Twitter15 it scores 0.852 [0.833, 0.869], above the
-lexical branch (+1.1 points, p = 0.021); `text_long` alone scores 0.770 there. Over
-both datasets together the gain over the lexical branch is +0.6 points
-(p = 0.15). Not run on PHEME. Full tables: `paper/results_and_methods.md`,
-section 4.7.
+lexical branch (+1.1 points, p = 0.021); `text_long` alone scores 0.770 there. On PHEME
+it scores 0.879 [0.871, 0.887], above the lexical branch (+0.8 points, p = 0.0059) and
+level with lexical + `text_long` (0.880, p = 0.53); `text_long` alone scores 0.868. Over
+the three datasets together the gain over the lexical branch is +0.8 points
+(267 against 198 threads, p = 0.0016). Full tables:
+`paper/results_and_methods.md`, section 4.7.
 
 The sections below follow the order the work was done in; each names its branch.
 Paper-ready tables, the method description and related work are in
@@ -265,7 +271,8 @@ no paired test), but still 6.5 points below the lexical arm (0.848, McNemar
 p < 0.0001). `stack_text` 0.856; `stack_text − lexical` +0.7 points [−0.7, +2.2],
 p = 0.42 (22 tweets only the stack gets right, 16 only the lexical arm). Longer training
 fixes most of the text arm's deficit, but the stack is not measurably better than the
-lexical arm alone. Not run on Twitter15 or PHEME.
+lexical arm alone. Twitter15 and PHEME were run later with the full pipeline (summary
+at the top; `paper/results_and_methods.md`, section 4.7).
 
 ## Story-held-out evaluation (branch `story-eval`)
 
