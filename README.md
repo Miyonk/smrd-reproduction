@@ -1,14 +1,52 @@
-# smrd-reproduction
+# SMRD — rumour detection on Twitter15, Twitter16 and PHEME
 
-An **independent reproduction** of the paper:
+A rumour-detection pipeline and a leakage-controlled evaluation of it on three public
+benchmarks: 4-way classification (non-rumour / false / true / unverified) on Twitter15
+and Twitter16, and rumour vs non-rumour on PHEME.
 
-> *"Enhanced Large Language Model with a Self-Attention Mechanism for Social Media Rumor Detection"*
+Four model families are compared on identical folds, with paired significance tests:
 
-The goal is to verify the reported results (Twitter15: 99.50%, Twitter16: 99.30%, PHEME: 99.10% accuracy) against the publicly available datasets. **This is not the authors' original code.**
+- **lexical** — TF-IDF of the source tweet and of the thread's words, logistic regression;
+- **text** — fine-tuned RoBERTa on the source tweet (6 epochs; `text_long` up to 30);
+- **graph** — BiGCN on the propagation tree;
+- **fusion** and **stacks** — RoBERTa + BiGCN trained jointly, and weighted averages of arms.
 
----
+Every fold uses 60% of the data for training, 20% for validation (model selection
+only, never trained on) and 20% for testing (predicted once).
 
-## Project Status
+## Summary of results
+
+Pooled 5-fold accuracy. *Grouped* folds keep near-duplicate tweets in one fold;
+*story-held-out* folds keep whole stories (PHEME: whole events) out of training.
+
+| Folds | Arm | Twitter16 | Twitter15 | PHEME |
+|---|---|---|---|---|
+| | majority class | 0.253 | 0.251 | 0.626 |
+| grouped | text (RoBERTa, 6 epochs) | 0.688 | 0.736 | 0.867 |
+| grouped | text_long (RoBERTa, ≤ 30 epochs) | 0.784 | — | — |
+| grouped | graph (BiGCN) | 0.804 | 0.797 | 0.858 |
+| grouped | fusion | 0.786 | 0.781 | 0.871 |
+| grouped | **lexical** | **0.848** | **0.840** | **0.871** |
+| story-held-out | lexical | 0.683 | 0.686 | 0.701 |
+
+What the experiments show:
+
+1. The lexical arm beats BiGCN on all three datasets (+4.4 / +4.3 / +1.3 points,
+   McNemar p ≤ 0.0003) and matches RoBERTa and fusion on PHEME.
+2. Nothing added on top of it gives a measurable gain: stacking it with BiGCN or with
+   the longer-trained RoBERTa, or tuning BiGCN with a Grey Wolf Optimizer search.
+3. Keeping near-duplicates out of training lowers RoBERTa on Twitter16 from 0.799
+   (random split) to 0.688.
+4. On stories absent from training the lexical arm falls to about 0.68–0.70, and on
+   Twitter15/16 the figure keeps falling as stories are defined more coarsely.
+
+The sections below follow the order the work was done in; each names its branch.
+Paper-ready tables, the method description and related work are in
+[`paper/results_and_methods.md`](paper/results_and_methods.md).
+
+The repository started as an implementation of a published GPT-2-based model; that
+code is still here and is described under [Legacy pipeline](#legacy-pipeline-gpt-2--dhoa).
+Its status table:
 
 | Phase | Status | Notes |
 |---|---|---|
@@ -270,6 +308,12 @@ Only the lexical arm has been run on these folds. `notebooks/colab_story.ipynb` 
 BiGCN and the longer-trained RoBERTa on them (T4 GPU, empty Drive is fine).
 
 ---
+
+# Legacy pipeline (GPT-2 + DHOA)
+
+Everything from here down describes the original GPT-2 / DHOA code the repository
+started with (`src/model.py`, `src/dhoa.py`, `src/train.py`, `src/run.py`). It is kept
+unchanged and is not used by the arms above.
 
 ## Design Document
 
