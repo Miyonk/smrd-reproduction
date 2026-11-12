@@ -178,9 +178,18 @@ python -m src.run_cv stack --dataset twitter16 --members lexical graph --ckpt-ro
 python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 ```
 
-Lexical arm, pooled accuracy on the 5 folds (local CPU run, scikit-learn 1.5):
-Twitter16 0.848, Twitter15 0.840, PHEME 0.871 — above BiGCN (0.804 / 0.797 / 0.858)
-on all three.
+Result (Colab, pooled accuracy on the 5 folds; the stack is lexical + BiGCN):
+
+| | Twitter16 | Twitter15 | PHEME |
+|---|---|---|---|
+| lexical | 0.848 | 0.840 | 0.871 |
+| stack | 0.840 | 0.844 | 0.872 |
+| lexical − BiGCN | +4.4 pts (p = 0.0001) | +4.3 pts (p < 0.0001) | +1.3 pts (p = 0.0003) |
+| stack − lexical | −0.9 pts (p = 0.12) | +0.3 pts (p = 0.13) | +0.1 pts (p = 0.53) |
+
+The lexical arm beats BiGCN on all three datasets. Adding BiGCN to it changes nothing
+measurable: the stack differs from the lexical arm on 15, 7 and 91 test tweets
+respectively, and none of the differences is significant (McNemar).
 
 ---
 
