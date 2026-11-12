@@ -41,9 +41,10 @@ Three branches trained on the same folds, then combined:
 4. **Combination** — the three branches' class probabilities are averaged with weights
    chosen on the validation fold (`stack_full`).
 
-The combination of all three branches has not been run yet;
-`notebooks/colab_full_pipeline.ipynb` runs it. The two-branch combinations are in
-section 4.1.
+On Twitter16 the three-branch combination scores 0.846, the same as the lexical branch
+alone (0.848; difference −0.2 points, p = 0.88), and one point below the two-branch
+lexical + text combination (0.856; p = 0.039). See section 4.7. It has not been run on
+Twitter15 or PHEME (`notebooks/colab_full_pipeline.ipynb`).
 
 ### 0.3 Ablation: what each component contributes (grouped folds, pooled accuracy)
 
@@ -57,7 +58,10 @@ section 4.1.
 | Lexical branch alone | 0.848 | 0.840 | 0.871 |
 | Lexical + propagation, stacked | 0.840 | 0.844 | 0.872 |
 | Lexical + text (≤ 30 epochs), stacked | 0.856 | not run | not run |
-| All three branches, stacked (proposed) | not run | not run | not run |
+| All three branches, stacked (proposed) | 0.846 | not run | not run |
+
+The Twitter16 column mixes two sets of runs; section 4.7 gives the set in which every
+configuration was run together.
 
 ### 0.4 Two points to settle with the mentor
 
@@ -124,7 +128,8 @@ confirmation with a stricter statistical treatment.
 
 | Item | Why it matters | Cost |
 |---|---|---|
-| All three branches stacked (`stack_full`) | It is the proposed pipeline's headline number, and it has not been run | GPU: `notebooks/colab_full_pipeline.ipynb` |
+| All three branches stacked (`stack_full`) on Twitter15 and PHEME | Run on Twitter16 only (section 4.7) | GPU: `notebooks/colab_full_pipeline.ipynb` |
+| Choose the final configuration without the test folds | Three-branch and two-branch stacks differ on Twitter16; picking the better one from test accuracy would bias the headline number. The validation scores stored with each stack can make the choice | Read the stored validation scores |
 | BiGCN and RoBERTa on the story-held-out folds | Only the lexical arm has story-held-out numbers; the comparison is the core table | GPU: `notebooks/colab_story.ipynb` |
 | Event ids for Twitter15/16 | Wu and Hooi use released event ids (298 / 182 events). Folds built from them would replace the text clustering and make results directly comparable | Find and check the released ids; CPU |
 | More than one seed per fold | Each fold has one training run, so run-to-run variation of the neural arms is not measured | GPU |
@@ -299,6 +304,39 @@ exactly. Validation accuracy stops improving after epochs 6–9 and then stays l
 (0.74–0.83 depending on the fold). Best epochs: 11, 8, 14, 25, 12. Mean best validation
 macro-F1 is 0.789 and mean test accuracy 0.783, so selecting the epoch on validation
 did not inflate the test estimate.
+
+### 4.7 Full pipeline on Twitter16 (all configurations in one set of runs)
+
+Run on a second account: lexical, `text_long` and BiGCN were trained there and all
+stacks were built from those runs. Pooled accuracy [Wilson 95% interval] and macro-F1.
+
+| Configuration | Accuracy | Macro-F1 |
+|---|---|---|
+| Text branch (≤ 30 epochs) | 0.784 [0.754, 0.810] | 0.782 |
+| Propagation branch (BiGCN) | 0.811 [0.782, 0.836] | 0.810 |
+| Lexical branch | 0.848 [0.822, 0.871] | 0.849 |
+| Lexical + propagation | 0.844 [0.817, 0.867] | 0.844 |
+| Lexical + text | 0.856 [0.830, 0.878] | 0.856 |
+| All three branches | 0.846 [0.820, 0.869] | 0.847 |
+
+| Comparison | Difference in points [95% interval] | Only first / only second correct | McNemar p |
+|---|---|---|---|
+| All three − lexical | −0.2 [−1.8, +1.3] | 21 / 23 | 0.88 |
+| All three − lexical + text | −1.0 [−1.8, −0.2] | 2 / 10 | 0.039 |
+| All three − propagation | +3.5 [+1.5, +5.6] | 53 / 24 | 0.0013 |
+| All three − text | +6.2 [+4.0, +8.5] | 72 / 21 | < 0.0001 |
+| Lexical + text − lexical | +0.7 [−0.7, +2.2] | 22 / 16 | 0.42 |
+| Lexical + propagation − lexical | −0.5 [−1.3, +0.3] | 4 / 8 | 0.39 |
+| Lexical − propagation | +3.8 [+1.8, +5.8] | 52 / 21 | 0.0004 |
+| Text − propagation | −2.7 [−5.5, +0.1] | 58 / 80 | 0.074 |
+
+Adding branches to the lexical branch does not improve it: no combination is
+significantly above it, and adding the propagation branch to lexical + text lowers
+accuracy by one point.
+
+BiGCN scored 0.811 in this set of runs and 0.804 in the first (same folds, same seeds,
+a different Colab runtime), so a difference of about 0.7 points between two BiGCN runs
+occurs without any change to the method. The lexical branch gave 0.848 in both.
 
 ---
 

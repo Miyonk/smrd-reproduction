@@ -42,7 +42,10 @@ What the experiments show:
 
 The proposed pipeline combines three branches (lexical, `text_long`, BiGCN) by stacking
 their class probabilities (`stack_full`); `notebooks/colab_full_pipeline.ipynb` trains
-and combines them from scratch. That three-branch combination has not been run yet.
+and combines them from scratch. On Twitter16 it scores 0.846 [0.820, 0.869], level with
+the lexical branch alone (−0.2 points, McNemar p = 0.88) and one point below lexical +
+`text_long` (0.856, p = 0.039); BiGCN retrained for that run scored 0.811. Not run on
+Twitter15 or PHEME.
 
 The sections below follow the order the work was done in; each names its branch.
 Paper-ready tables, the method description and related work are in
