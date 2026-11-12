@@ -131,7 +131,6 @@ confirmation with a stricter statistical treatment.
 
 | Item | Why it matters | Cost |
 |---|---|---|
-| Report the stacking weights | The mean weight each branch receives per dataset shows how much the pipeline relies on each; stored in every stack fold's `result.json` | Read from Drive, no GPU |
 | BiGCN and RoBERTa on the story-held-out folds | Only the lexical arm has story-held-out numbers; the comparison is the core table | GPU: `notebooks/colab_story.ipynb` |
 | Event ids for Twitter15/16 | Wu and Hooi use released event ids (298 / 182 events). Folds built from them would replace the text clustering and make results directly comparable | Find and check the released ids; CPU |
 | More than one seed per fold | Each fold has one training run, so run-to-run variation of the neural arms is not measured | GPU |
@@ -374,6 +373,34 @@ about eight times as many training threads as a Twitter16 fold.
 in the first (same folds, same seeds, a different Colab runtime); on Twitter15 0.798
 and 0.797; on PHEME 0.858 in both. The lexical branch gave the same accuracy in both
 sets.
+
+### 4.8 Stacking weights of the three-branch pipeline
+
+Weights chosen on the validation fold (grid step 0.1), per fold, and their mean.
+
+| Dataset | Branch | Fold 0 | Fold 1 | Fold 2 | Fold 3 | Fold 4 | Mean |
+|---|---|---|---|---|---|---|---|
+| Twitter16 | Lexical | 0.6 | 0.5 | 0.8 | 0.7 | 0.7 | 0.66 |
+| | Text | 0.4 | 0.3 | 0.0 | 0.3 | 0.1 | 0.22 |
+| | Propagation | 0.0 | 0.2 | 0.2 | 0.0 | 0.2 | 0.12 |
+| Twitter15 | Lexical | 0.6 | 0.5 | 0.6 | 0.9 | 1.0 | 0.72 |
+| | Text | 0.2 | 0.2 | 0.1 | 0.1 | 0.0 | 0.12 |
+| | Propagation | 0.2 | 0.3 | 0.3 | 0.0 | 0.0 | 0.16 |
+| PHEME | Lexical | 0.4 | 0.4 | 0.5 | 0.3 | 0.6 | 0.44 |
+| | Text | 0.4 | 0.4 | 0.2 | 0.3 | 0.4 | 0.34 |
+| | Propagation | 0.2 | 0.2 | 0.3 | 0.4 | 0.0 | 0.22 |
+
+Validation macro-F1 of the chosen weights, mean over folds, against pooled test
+macro-F1: 0.869 / 0.847 (Twitter16), 0.869 / 0.852 (Twitter15), 0.881 / 0.871 (PHEME).
+The validation figure is higher because the weights and each branch's best model were
+chosen on those rows; the test figure is the one reported.
+
+The lexical branch receives about two thirds of the weight on the Twitter datasets and
+under half on PHEME, where the three branches are closest in accuracy. The weights
+differ considerably between folds of the same dataset (the propagation branch receives
+between 0 and 0.4, and in Twitter15 fold 4 the lexical branch receives all of it), so
+they are not estimated precisely from one validation fold of 160–300 tweets on the
+Twitter datasets.
 
 ---
 
