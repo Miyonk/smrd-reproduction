@@ -18,6 +18,14 @@ Re-running the same command resumes from the next epoch; a disconnect costs at
 most one epoch.  When a run finishes, ``result.json`` and ``artifact/`` are
 written and the bulky ``last.pt`` / ``best_model.pt`` are removed unless
 ``keep_checkpoints`` is set.
+
+Light runs
+----------
+``run_finetune(..., light=True)`` writes nothing bulky: no ``last.pt`` (an
+interrupted run starts again), the best weights are held in memory, and no
+artifact is saved.  It leaves ``result.json`` plus ``probs.json`` (validation
+and test class probabilities of the best-validation weights) - a few hundred
+kB instead of ~0.5 GB, which is what a stacked arm needs.
 """
 
 from __future__ import annotations
@@ -292,9 +300,11 @@ def run_finetune(
     model: Optional[SourceTextClassifier] = None,
     keep_checkpoints: bool = False,
     split_source: Optional[str] = None,
+    light: bool = False,
     _stop_after_epoch: Optional[int] = None,
 ) -> Dict:
-    """Train, early-stop on val macro-F1, evaluate test once, save the artifact."""
+    """Train, early-stop on val macro-F1, evaluate test once, save the artifact
+    (``light=True``: save class probabilities instead of the model)."""
     ckpt_dir = Path(ckpt_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     result_path = ckpt_dir / "result.json"
@@ -339,8 +349,10 @@ def run_finetune(
     stopper = EarlyStopper(cfg.patience)
     history: List[Dict] = []
     start_epoch = 0
+    best_state: Optional[Dict] = None  # light runs: best weights, on the CPU
+    best_val_probs: Optional[List[List[float]]] = None
 
-    if last_path.exists():
+    if not light and last_path.exists():
         state = torch.load(last_path, map_location="cpu", weights_only=False)
         if state["config"] != cfg.to_dict():
             raise RuntimeError(
@@ -405,7 +417,10 @@ def run_finetune(
         )
         epoch_seconds = time.perf_counter() - t0
         improved = stopper.update(val["macro_f1"], epoch)
-        if improved:
+        if improved and light:
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_val_probs = val["probabilities"]
+        elif improved:
             _atomic_torch_save({"model": model.state_dict(), "epoch": epoch}, best_path)
         record = {
             "epoch": epoch,
@@ -431,29 +446,32 @@ def run_finetune(
             val["macro_f1"], "*best*" if improved else "", epoch_seconds,
             record["train_examples_per_second"], record["peak_vram_gib"],
         )
-        _atomic_torch_save(
-            {
-                "config": cfg.to_dict(),
-                "epoch": epoch,
-                "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "scaler": scaler.state_dict(),
-                "stopper": stopper.state_dict(),
-                "history": history,
-                "rng": {
-                    "torch": torch.get_rng_state(),
-                    "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        if not light:
+            _atomic_torch_save(
+                {
+                    "config": cfg.to_dict(),
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "scaler": scaler.state_dict(),
+                    "stopper": stopper.state_dict(),
+                    "history": history,
+                    "rng": {
+                        "torch": torch.get_rng_state(),
+                        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                    },
                 },
-            },
-            last_path,
-        )
+                last_path,
+            )
         if _stop_after_epoch is not None and epoch == _stop_after_epoch:
             raise _SimulatedInterrupt(f"simulated interrupt after epoch {epoch}")
 
     # ---- finalize: single test evaluation with best-validation weights ----
-    best_state = torch.load(best_path, map_location="cpu", weights_only=False)
-    model.load_state_dict(best_state["model"])
+    if light:
+        model.load_state_dict(best_state)
+    else:
+        model.load_state_dict(torch.load(best_path, map_location="cpu", weights_only=False)["model"])
     test = evaluate_split(
         model, tokenizer, texts, view.test_indices, view.labels, cfg, dev, amp_dtype
     )
@@ -471,23 +489,36 @@ def run_finetune(
         )
 
     artifact_dir = ckpt_dir / "artifact"
-    save_artifact(
-        model,
-        tokenizer,
-        artifact_dir,
-        class_names=view.class_names,
-        encoder_name=cfg.encoder_name,
-        max_len=cfg.max_len,
-        extra={
-            "dataset": cfg.dataset,
-            "task": cfg.task,
-            "best_epoch": stopper.best_epoch,
-            "best_val_macro_f1": stopper.best,
-            "training_config": cfg.to_dict(),
-            "git_commit": _git_commit(),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    if light:
+        from src.lexical import PROBS_FILE, write_probs
+
+        # validation probabilities are those of the best epoch, kept from its
+        # own evaluation, so validation is not scored a second time
+        write_probs(
+            ckpt_dir / PROBS_FILE,
+            {
+                "val": (view.val_indices, np.asarray(best_val_probs)),
+                "test": (view.test_indices, np.asarray(test["probabilities"])),
+            },
+        )
+    else:
+        save_artifact(
+            model,
+            tokenizer,
+            artifact_dir,
+            class_names=view.class_names,
+            encoder_name=cfg.encoder_name,
+            max_len=cfg.max_len,
+            extra={
+                "dataset": cfg.dataset,
+                "task": cfg.task,
+                "best_epoch": stopper.best_epoch,
+                "best_val_macro_f1": stopper.best,
+                "training_config": cfg.to_dict(),
+                "git_commit": _git_commit(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     result = {
         "config": cfg.to_dict(),
@@ -523,7 +554,7 @@ def run_finetune(
             }
             for i, p, pr in zip(view.test_indices, test["predictions"], test["probabilities"])
         ],
-        "artifact": str(artifact_dir),
+        "artifact": None if light else str(artifact_dir),
         "git_commit": _git_commit(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }

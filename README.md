@@ -191,6 +191,26 @@ The lexical arm beats BiGCN on all three datasets. Adding BiGCN to it changes no
 measurable: the stack differs from the lexical arm on 15, 7 and 91 test tweets
 respectively, and none of the differences is significant (McNemar).
 
+## Longer-trained text arm (branch `text-long`)
+
+The stage 1 text arm trains RoBERTa for 6 epochs, which is under 200 optimizer steps on
+a Twitter16 fold, and it scores well below the lexical arm on the same tweets
+(0.688 vs 0.848). `text_long` is the same model and settings with up to 30 epochs
+(patience 10); the best epoch is still chosen on the validation fold. `stack_text` is
+the stack of `lexical` and `text_long`.
+
+```bash
+python -m src.run_cv train --dataset twitter16 --arm lexical --ckpt-root <dir>
+python -m src.run_cv train --dataset twitter16 --arm text_long --light --ckpt-root <dir>
+python -m src.run_cv stack --dataset twitter16 --members lexical text_long --tag text --ckpt-root <dir>
+python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
+```
+
+`--light` keeps only `result.json` and `probs.json` per fold (validation and test class
+probabilities of the best epoch): no saved model and no per-epoch checkpoint, so an
+interrupted fold starts again. `notebooks/colab_text_long.ipynb` runs all of this from
+an empty Drive (T4 GPU). Not yet run.
+
 ---
 
 ## Design Document

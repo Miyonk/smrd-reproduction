@@ -7,12 +7,16 @@ CLI for grouped 5-fold cross-validation of the three arms (see ``src/cv.py``).
     python -m src.run_cv train --dataset twitter16 --arm fusion --ckpt-root <dir>
     python -m src.run_cv train --dataset twitter16 --arm lexical --ckpt-root <dir>   # CPU
     python -m src.run_cv stack --dataset twitter16 --members lexical graph --ckpt-root <dir>
+    python -m src.run_cv train --dataset twitter16 --arm text_long --light --ckpt-root <dir>
+    python -m src.run_cv stack --dataset twitter16 --members lexical text_long --tag text --ckpt-root <dir>
     python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 
 Arms: ``text`` (RoBERTa on the source tweet), ``graph`` (BiGCN) and ``fusion``
 are the stage 1 / stage 2 models with their default settings, unchanged;
 ``lexical`` is TF-IDF + logistic regression (``src/lexical.py``); ``stack`` is a
-validation-weighted average of other arms' probabilities (``src/stack.py``).
+validation-weighted average of other arms' probabilities (``src/stack.py``);
+``text_long`` is the ``text`` model on a longer schedule (``TEXT_ARMS``) and
+``stack_text`` the stack of ``lexical`` and ``text_long``.
 One run per fold, seed ``base_seed + fold``.  Fold runs live in
 ``<ckpt-root>/<dataset>_<task>_<arm>/fold<k>/`` and resume like any other run.
 """
@@ -43,8 +47,16 @@ LOGGER = logging.getLogger("smrd.cv")
 RESULTS_DIR = ROOT / "results" / "cv"
 DEFAULT_CKPT_ROOT = ROOT / "checkpoints" / "cv"
 CV_ARMS = ("text", "graph", "fusion")
-TRAIN_ARMS = CV_ARMS + ("lexical",)
-NEURAL_ARMS = CV_ARMS
+# Source-text arms: FinetuneConfig overrides on top of the stage 1 defaults.
+# Stage 1's 6 epochs are under 200 optimizer steps on a Twitter16 fold;
+# ``text_long`` gives the same model up to 30 epochs (best epoch still chosen
+# on the validation fold).
+TEXT_ARMS = {
+    "text": {},
+    "text_long": {"max_epochs": 30, "patience": 10},
+}
+TRAIN_ARMS = CV_ARMS + ("lexical", "text_long")
+NEURAL_ARMS = CV_ARMS + ("text_long",)
 # Optional arms, reported once started, and the arms each is paired against.
 # *_gwo: stage 3 (src/run_tune.py).
 OPTIONAL_ARMS = {
@@ -52,6 +64,9 @@ OPTIONAL_ARMS = {
     "fusion_gwo": ("fusion",),
     "lexical": ("graph", "text"),
     "stack": ("lexical", "graph"),
+    "text_long": ("lexical", "text"),
+    # written by ``stack --members lexical text_long --tag text``
+    "stack_text": ("lexical", "text_long"),
 }
 TUNED_ARMS = ("graph_gwo", "fusion_gwo")
 TASK_TO_ARM = {"4way": "arm_a", "binary": "arm_b"}
@@ -106,7 +121,9 @@ def cmd_train(args) -> Dict:
 
     graphs = meta = bags = None
     texts = [normalize_tweet(t) for t in df["raw_text"].astype(str).tolist()]
-    if arm != "text":
+    if args.light and arm not in TEXT_ARMS:
+        raise SystemExit("--light applies to the text arms only")
+    if arm not in TEXT_ARMS:
         from src.propagation import load_graphs, restrict_vocab
 
         variant = "fullvocab" if dataset in FOLD_VOCAB_DATASETS else None
@@ -115,7 +132,7 @@ def cmd_train(args) -> Dict:
         from src.lexical import LexicalConfig, run_lexical, thread_bags
 
         bags = thread_bags(graphs)  # idf is fitted per fold, on training rows
-    elif arm == "text":
+    elif arm in TEXT_ARMS:
         from src.finetune import FinetuneConfig, run_finetune
     else:
         from src.train_propagation import ARM_DEFAULTS, PropagationConfig, run_propagation
@@ -129,11 +146,12 @@ def cmd_train(args) -> Dict:
             shutil.rmtree(ckpt_dir)
         source = folds.split_source(fold)
         LOGGER.info("=== %s fold %d seed %d -> %s ===", run_dir.name, fold, seed, ckpt_dir)
-        if arm == "text":
-            cfg = FinetuneConfig(dataset=dataset, task=task, seed=seed)
+        if arm in TEXT_ARMS:
+            cfg = FinetuneConfig(dataset=dataset, task=task, seed=seed, **TEXT_ARMS[arm])
             if args.max_epochs:
                 cfg.max_epochs = args.max_epochs
-            result = run_finetune(cfg, ckpt_dir, device=args.device, df=df, view=view, split_source=source)
+            result = run_finetune(cfg, ckpt_dir, device=args.device, df=df, view=view,
+                                  split_source=source, light=args.light)
         elif arm == "lexical":
             cfg = LexicalConfig(dataset=dataset, task=task, graph_cache_sha256=meta["sha256"])
             result = run_lexical(cfg, ckpt_dir, df=df, view=view, texts=texts, bags=bags, split_source=source)
@@ -166,6 +184,7 @@ def cmd_train(args) -> Dict:
             "test_macro_f1": round(result["test_full"]["macro_f1"], 4),
             "best_val_macro_f1": round(result["best_val_macro_f1"], 4),
             "epochs_run": result["epochs_run"],
+            "best_epoch": result["best_epoch"],
         })
     return {"run": run_dir.name, "folds": done}
 
@@ -178,7 +197,7 @@ def _neural_probs(arm: str, artifact_dir: Path, parts: Dict[str, List[int]], tex
     from src.finetune import _chunks, _tokenize, resolve_device
 
     dev = resolve_device(device)
-    if arm == "text":
+    if arm in TEXT_ARMS:
         from src.encoder_model import load_artifact
 
         model, tokenizer, cfg = load_artifact(artifact_dir, dev)
@@ -231,7 +250,7 @@ def ensure_probs(ckpt_root, dataset, task, arm, fold, folds, view, texts, graphs
     if not artifact.exists():
         raise SystemExit(f"{artifact} is missing, so {arm} fold {fold} cannot be re-scored; retrain it with --fresh")
     fold_graphs = graphs
-    if arm != "text" and dataset in FOLD_VOCAB_DATASETS:
+    if arm not in TEXT_ARMS and dataset in FOLD_VOCAB_DATASETS:
         from src.propagation import restrict_vocab
 
         fold_graphs, _ = restrict_vocab(graphs, view.train_indices)
@@ -365,8 +384,8 @@ def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -
         tag = tuned_tag if arm in TUNED_ARMS else None
         results = load_arm_results(ckpt_root, dataset, task, arm, folds, tag)
         if results is None:
-            # an optional arm is reported only once it has been started
-            if arm in CV_ARMS or _run_dir(ckpt_root, dataset, task, arm, tag).exists():
+            # an arm is reported only once it has been started under this root
+            if _run_dir(ckpt_root, dataset, task, arm, tag).exists():
                 missing.append(arm)
             continue
         rows, labels, preds = pool_fold_results(results, expected)
@@ -450,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ckpt-root", default=str(DEFAULT_CKPT_ROOT))
     p.add_argument("--tag", default=None)
     p.add_argument("--fresh", action="store_true")
+    p.add_argument("--light", action="store_true",
+                   help="text arms: keep only result.json and probs.json (no saved model, no "
+                        "per-epoch checkpoint; an interrupted fold starts again)")
 
     p = sub.add_parser("stack", help="validation-weighted average of trained arms")
     p.add_argument("--dataset", choices=DATASETS, required=True)

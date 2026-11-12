@@ -153,6 +153,8 @@ def test_compare_end_to_end(tmp_path):
                 "test_full": {"accuracy": acc, "macro_f1": acc, "n": len(preds)},
                 "best_val_macro_f1": 0.5, "best_epoch": 1, "test_predictions": preds,
             }))
+    assert cmd_compare("twitter16", str(tmp_path))["unfinished_arms"] == []  # never started: not listed
+    (tmp_path / "twitter16_4way_fusion" / "fold0").mkdir(parents=True)  # started, not finished
     out = cmd_compare("twitter16", str(tmp_path))
     assert out["unfinished_arms"] == ["fusion"] and out["n"] == len(df)
     assert out["arms"]["text"]["pooled"]["accuracy"] == 1.0

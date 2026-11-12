@@ -260,6 +260,63 @@ def test_test_split_never_used_for_selection(tmp_path, monkeypatch):
     assert calls == ["val", "val", "val", "test"]
 
 
+def test_light_run_keeps_probabilities_instead_of_the_model(tmp_path):
+    """light=True trains exactly like a normal run but leaves only result.json
+    and probs.json (validation + test probabilities of the best weights)."""
+    import numpy as np
+
+    from src.stack import read_probs
+
+    df, view = toy_data()
+    full = run_finetune(
+        _cfg(), tmp_path / "full", device="cpu", df=df, view=view,
+        tokenizer=StubTokenizer(), model=tiny_model(),
+    )
+    light = run_finetune(
+        _cfg(), tmp_path / "light", device="cpu", df=df, view=view,
+        tokenizer=StubTokenizer(), model=tiny_model(), light=True,
+    )
+    assert sorted(p.name for p in (tmp_path / "light").iterdir()) == ["probs.json", "result.json"]
+    assert light["artifact"] is None
+    assert light["best_epoch"] == full["best_epoch"]
+    for a, b in zip(full["history"], light["history"]):
+        assert a["train_loss"] == pytest.approx(b["train_loss"], rel=1e-4, abs=1e-6)
+        assert a["val_macro_f1"] == pytest.approx(b["val_macro_f1"])
+    assert [p["pred"] for p in light["test_predictions"]] == [p["pred"] for p in full["test_predictions"]]
+
+    val_p, test_p = read_probs(tmp_path / "light" / "probs.json", view.val_indices, view.test_indices, 4)
+    assert np.allclose(test_p.max(1), [p["confidence"] for p in light["test_predictions"]], atol=1e-5)
+    # the stored validation probabilities are those of the best epoch
+    best = light["history"][light["best_epoch"] - 1]
+    val_loss = -np.log(val_p[np.arange(len(val_p)), view.val_labels]).mean()
+    assert val_loss == pytest.approx(best["val_loss"], abs=1e-3)
+    # a finished light run is reused, not retrained
+    again = run_finetune(
+        _cfg(), tmp_path / "light", device="cpu", df=df, view=view,
+        tokenizer=StubTokenizer(), model=tiny_model(), light=True,
+    )
+    assert again["finished_at"] == light["finished_at"]
+
+
+def test_light_run_scores_validation_once_per_epoch_and_test_once(tmp_path, monkeypatch):
+    import src.finetune as ft
+
+    df, view = toy_data()
+    calls = []
+    original = ft.evaluate_split
+
+    def spy(model, tok, texts, indices, labels, cfg, device, amp):
+        calls.append("test" if list(indices) == list(view.test_indices) else "val")
+        return original(model, tok, texts, indices, labels, cfg, device, amp)
+
+    monkeypatch.setattr(ft, "evaluate_split", spy)
+    run_finetune(
+        _cfg(max_epochs=3), tmp_path / "s", device="cpu", df=df, view=view,
+        tokenizer=StubTokenizer(), model=tiny_model(), light=True,
+    )
+    assert calls == ["val", "val", "val", "test"]
+
+
 def test_artifact_roundtrip_predicts_with_confidence(tmp_path):
     """Saved artifact reloads without training code and returns label+confidence."""
     df, view = toy_data()

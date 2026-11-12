@@ -136,11 +136,9 @@ def test_read_probs_validates(tmp_path):
         read_probs(path, [1, 2], [3], 2)
 
 
-def test_stack_and_compare_on_real_folds(tmp_path):
-    """Fake members on the real Twitter16 folds: 'lexical' is right on even
-    rows, 'graph' on odd rows, each confident only where it is right."""
-    from src.run_cv import cmd_compare, cmd_stack, format_comparison
-
+def _fake_members(root, arms):
+    """Fake member runs on the real Twitter16 folds: 'lexical' is right on even
+    rows, any other arm on odd rows, each confident only where it is right."""
     df = load_dataset("twitter16")
     ids = df["tweet_id"].astype(str).tolist()
     base = build_arm_view(Config(task_arm="arm_a", dataset_name="twitter16"), df=df)
@@ -151,10 +149,10 @@ def test_stack_and_compare_on_real_folds(tmp_path):
         right = (np.array(rows) % 2 == 0) == (arm == "lexical")
         return _onehot(np.where(right, y, (y + 1) % 4), conf=np.where(right, 0.9, 0.4))
 
-    for arm in ("lexical", "graph"):
+    for arm in arms:
         for k in range(5):
             view = folds.view(base, k)
-            d = tmp_path / f"twitter16_4way_{arm}" / f"fold{k}"
+            d = root / f"twitter16_4way_{arm}" / f"fold{k}"
             d.mkdir(parents=True)
             pt = probs(arm, view.test_indices)
             write_probs(d / PROBS_FILE, {"val": (view.val_indices, probs(arm, view.val_indices)),
@@ -168,7 +166,13 @@ def test_stack_and_compare_on_real_folds(tmp_path):
                 "test_predictions": [{"row": i, "label": base.labels[i], "pred": p}
                                      for i, p in zip(view.test_indices, preds)],
             }))
+    return df
 
+
+def test_stack_and_compare_on_real_folds(tmp_path):
+    from src.run_cv import cmd_compare, cmd_stack, format_comparison
+
+    df = _fake_members(tmp_path, ("lexical", "graph"))
     args = SimpleNamespace(dataset="twitter16", members=["lexical", "graph"], folds=list(range(5)),
                            device="cpu", ckpt_root=str(tmp_path), tag=None, fresh=False)
     out = cmd_stack(args)
@@ -181,10 +185,73 @@ def test_stack_and_compare_on_real_folds(tmp_path):
 
     report = cmd_compare("twitter16", str(tmp_path))
     assert report["arms"]["stack"]["pooled"]["accuracy"] == 1.0
-    assert set(report["unfinished_arms"]) == {"text", "fusion"}
+    assert report["unfinished_arms"] == []  # arms never started under this root are not listed
     assert report["pairs"]["stack_minus_lexical"]["only_b_correct"] == 0
     assert report["pairs"]["lexical_minus_graph"]["n"] == len(df)
     assert "stack - lexical" in format_comparison(report)
+
+
+def test_text_stack_needs_nothing_but_lexical_and_text_long(tmp_path):
+    """A fresh checkpoint root with only the lexical and text_long folds
+    (result.json + probs.json, no saved model) stacks and compares."""
+    from src.run_cv import build_parser, cmd_compare, cmd_stack, format_comparison
+
+    df = _fake_members(tmp_path, ("lexical", "text_long"))
+    args = build_parser().parse_args(
+        ["stack", "--dataset", "twitter16", "--members", "lexical", "text_long", "--tag", "text",
+         "--ckpt-root", str(tmp_path)]
+    )
+    out = cmd_stack(args)
+    assert out["run"] == "twitter16_4way_stack_text"
+    assert [f["test_accuracy"] for f in out["folds"]] == [1.0] * 5
+
+    report = cmd_compare("twitter16", str(tmp_path))
+    assert list(report["arms"]) == ["lexical", "text_long", "stack_text"]
+    assert report["unfinished_arms"] == []
+    assert set(report["pairs"]) == {"text_long_minus_lexical", "stack_text_minus_lexical",
+                                    "stack_text_minus_text_long"}
+    assert report["pairs"]["stack_text_minus_text_long"]["n"] == len(df)
+    text = format_comparison(report)
+    assert "stack_text - lexical" in text and "unfinished" not in text
+
+
+def test_text_long_arm_is_the_text_model_on_a_longer_schedule(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    import src.finetune as ft
+    from src.run_cv import build_parser, cmd_train
+
+    seen = []
+
+    def fake(cfg, ckpt_dir, **kw):
+        seen.append((cfg, ckpt_dir, kw))
+        n = len(kw["view"].test_indices)
+        return {"split": {"source": kw["split_source"]}, "epochs_run": 30, "best_epoch": 12,
+                "best_val_macro_f1": 1.0, "test_full": {"n": n, "accuracy": 1.0, "macro_f1": 1.0}}
+
+    monkeypatch.setattr(ft, "run_finetune", fake)
+    args = build_parser().parse_args(
+        ["train", "--dataset", "twitter16", "--arm", "text_long", "--light", "--folds", "0", "3",
+         "--ckpt-root", str(tmp_path)]
+    )
+    out = cmd_train(args)
+    assert out["run"] == "twitter16_4way_text_long" and out["folds"][1]["best_epoch"] == 12
+    cfg, ckpt_dir, kw = seen[1]
+    default = ft.FinetuneConfig(seed=45)
+    assert (cfg.max_epochs, cfg.patience) == (30, 10) and kw["light"] is True
+    assert ckpt_dir == tmp_path / "twitter16_4way_text_long" / "fold3"
+    skip = ("max_epochs", "patience")
+    assert {k: v for k, v in cfg.to_dict().items() if k not in skip} == {
+        k: v for k, v in default.to_dict().items() if k not in skip
+    }
+    # the stage 1 arm itself is unchanged, and --light is refused for non-text arms
+    args = build_parser().parse_args(["train", "--dataset", "twitter16", "--arm", "text", "--folds", "0",
+                                      "--ckpt-root", str(tmp_path)])
+    cmd_train(args)
+    assert seen[-1][0].to_dict() == ft.FinetuneConfig(seed=42).to_dict() and seen[-1][2]["light"] is False
+    args = build_parser().parse_args(["train", "--dataset", "twitter16", "--arm", "graph", "--light",
+                                      "--ckpt-root", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        cmd_train(args)
 
 
 def test_neural_member_is_rescored_from_its_artifact(tmp_path):
