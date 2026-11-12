@@ -4,8 +4,73 @@ Working notes for the journal paper. Every number in sections 3 and 4 comes from
 recorded in the repository README; nothing here is estimated. Section 1 reports what
 other papers say and must be checked against their PDFs before it is cited.
 
-Contents: 1. Related work and what this study adds · 2. Open items before submission ·
-3. Method · 4. Results · 5. Limitations
+Contents: 0. Framing: a modified version of the base paper · 1. Related work and what
+this study adds · 2. Open items before submission · 3. Method · 4. Results ·
+5. Limitations
+
+---
+
+## 0. Framing: a modified version of the base paper
+
+The paper presents a modified version of the method in *"Enhanced Large Language Model
+with a Self-Attention Mechanism for Social Media Rumor Detection"* (the base paper).
+The base paper's pipeline has four stages: text pre-processing, RoBERTa feature
+extraction, a GPT classifier, and hyperparameter optimisation with the Deer Hunting
+Optimization Algorithm (DHOA). Each stage is changed here.
+
+### 0.1 What is changed, stage by stage
+
+| Stage | Base paper | This work | What the experiments show |
+|---|---|---|---|
+| Pre-processing | URL removal, stop-word removal, tokenisation, stemming, lemmatisation | Minimal normalisation only (URLs → `URL`, mentions → `@USER`), so the pretrained encoder sees natural text | — |
+| Text representation | RoBERTa embeddings used as features | RoBERTa fine-tuned end to end on the source tweet | Needs up to 30 epochs on the small Twitter sets: 0.688 → 0.784 on Twitter16 |
+| Classifier | GPT (self-attention) on the RoBERTa features | Linear head on RoBERTa; the GPT stage is removed | — |
+| Propagation (new) | Not used | BiGCN branch on the reply tree | 0.804 / 0.797 / 0.858; above RoBERTa on Twitter15/16 |
+| Lexical (new) | Not used | TF-IDF of source tweet and thread words, logistic regression | 0.848 / 0.840 / 0.871; the strongest single branch |
+| Combination (new) | — | Validation-weighted average of the branches' probabilities (stacking); joint fusion as an alternative | Lexical + RoBERTa 0.856 on Twitter16; not significantly above lexical alone |
+| Hyperparameter search | DHOA over learning rate, batch size, layers, heads, dropout | Grey Wolf Optimizer, nested inside cross-validation so the test fold is never used for tuning | No gain on Twitter16 (+0.1 points, p = 1.0) |
+| Evaluation | Split and validation procedure not described | Grouped 5-fold cross-validation with a separate validation fold, paired significance tests, and a story-held-out split | Section 4 |
+
+### 0.2 The proposed pipeline
+
+Three branches trained on the same folds, then combined:
+
+1. **Lexical branch** — TF-IDF + logistic regression.
+2. **Text branch** — fine-tuned RoBERTa (`text_long`).
+3. **Propagation branch** — BiGCN.
+4. **Combination** — the three branches' class probabilities are averaged with weights
+   chosen on the validation fold (`stack_full`).
+
+The combination of all three branches has not been run yet;
+`notebooks/colab_full_pipeline.ipynb` runs it. The two-branch combinations are in
+section 4.1.
+
+### 0.3 Ablation: what each component contributes (grouped folds, pooled accuracy)
+
+| Configuration | Twitter16 | Twitter15 | PHEME |
+|---|---|---|---|
+| Text branch alone, 6 epochs | 0.688 | 0.736 | 0.867 |
+| Text branch alone, ≤ 30 epochs | 0.784 | not run | not run |
+| Propagation branch alone | 0.804 | 0.797 | 0.858 |
+| Propagation branch + GWO search | 0.806 | not run | not run |
+| Text + propagation, joint fusion | 0.786 | 0.781 | 0.871 |
+| Lexical branch alone | 0.848 | 0.840 | 0.871 |
+| Lexical + propagation, stacked | 0.840 | 0.844 | 0.872 |
+| Lexical + text (≤ 30 epochs), stacked | 0.856 | not run | not run |
+| All three branches, stacked (proposed) | not run | not run | not run |
+
+### 0.4 Two points to settle with the mentor
+
+1. **The base paper reports 99.1–99.5% accuracy; this pipeline scores 0.84–0.87.** A
+   reviewer will ask why a modified version scores lower. The answer the evidence
+   supports is the evaluation protocol: the base paper does not describe its split or
+   validation procedure, while here near-duplicate tweets are kept out of training and
+   a separate validation fold is used. Section 1.1 lists published work showing that
+   scores on these benchmarks drop sharply once such leakage is removed. The paper
+   cannot claim to improve on the base paper's reported accuracy.
+2. **The strongest component is the simplest one.** The lexical branch does most of
+   the work, and the added branches give no statistically significant gain over it. The
+   ablation table has to show that as it is.
 
 ---
 
@@ -29,7 +94,8 @@ verified against the PDFs before they are quoted.
 
 ### 1.2 What this study adds
 
-Stated conservatively, the contribution is a controlled re-evaluation, not a new method:
+The modified pipeline of section 0 is the paper's subject. Beyond the pipeline itself,
+the evaluation gives four results that the papers above cover only partly:
 
 1. **A near-duplicate-grouped protocol between the two extremes.** Published work
    compares random splits with event-separated or chronological splits. Here an
@@ -58,6 +124,7 @@ confirmation with a stricter statistical treatment.
 
 | Item | Why it matters | Cost |
 |---|---|---|
+| All three branches stacked (`stack_full`) | It is the proposed pipeline's headline number, and it has not been run | GPU: `notebooks/colab_full_pipeline.ipynb` |
 | BiGCN and RoBERTa on the story-held-out folds | Only the lexical arm has story-held-out numbers; the comparison is the core table | GPU: `notebooks/colab_story.ipynb` |
 | Event ids for Twitter15/16 | Wu and Hooi use released event ids (298 / 182 events). Folds built from them would replace the text clustering and make results directly comparable | Find and check the released ids; CPU |
 | More than one seed per fold | Each fold has one training run, so run-to-run variation of the neural arms is not measured | GPU |

@@ -40,6 +40,10 @@ What the experiments show:
 4. On stories absent from training the lexical arm falls to about 0.68–0.70, and on
    Twitter15/16 the figure keeps falling as stories are defined more coarsely.
 
+The proposed pipeline combines three branches (lexical, `text_long`, BiGCN) by stacking
+their class probabilities (`stack_full`); `notebooks/colab_full_pipeline.ipynb` trains
+and combines them from scratch. That three-branch combination has not been run yet.
+
 The sections below follow the order the work was done in; each names its branch.
 Paper-ready tables, the method description and related work are in
 [`paper/results_and_methods.md`](paper/results_and_methods.md).

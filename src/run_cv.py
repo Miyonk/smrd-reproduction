@@ -71,6 +71,8 @@ OPTIONAL_ARMS = {
     "text_long": ("lexical", "text", "graph"),
     # written by ``stack --members lexical text_long --tag text``
     "stack_text": ("lexical", "text_long"),
+    # the full pipeline: ``stack --members lexical text_long graph --tag full``
+    "stack_full": ("lexical", "text_long", "graph", "stack_text"),
 }
 TUNED_ARMS = ("graph_gwo", "fusion_gwo")
 TASK_TO_ARM = {"4way": "arm_a", "binary": "arm_b"}

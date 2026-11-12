@@ -215,6 +215,24 @@ def test_text_stack_needs_nothing_but_lexical_and_text_long(tmp_path):
     assert "stack_text - lexical" in text and "unfinished" not in text
 
 
+def test_full_pipeline_stack_of_three_members(tmp_path):
+    from src.run_cv import build_parser, cmd_compare, cmd_stack, format_comparison
+
+    _fake_members(tmp_path, ("lexical", "text_long", "graph"))
+    args = build_parser().parse_args(
+        ["stack", "--dataset", "twitter16", "--members", "lexical", "text_long", "graph", "--tag", "full",
+         "--ckpt-root", str(tmp_path)]
+    )
+    out = cmd_stack(args)
+    assert out["run"] == "twitter16_4way_stack_full"
+    assert all(abs(sum(f["weights"].values()) - 1) < 1e-9 and len(f["weights"]) == 3 for f in out["folds"])
+    assert [f["test_accuracy"] for f in out["folds"]] == [1.0] * 5
+    report = cmd_compare("twitter16", str(tmp_path))
+    assert "stack_full" in report["arms"] and report["unfinished_arms"] == []
+    assert {"stack_full_minus_lexical", "stack_full_minus_text_long", "stack_full_minus_graph"} <= set(report["pairs"])
+    assert "stack_full - lexical" in format_comparison(report)
+
+
 def test_text_long_arm_is_the_text_model_on_a_longer_schedule(tmp_path, monkeypatch):
     pytest.importorskip("torch")
     import src.finetune as ft
