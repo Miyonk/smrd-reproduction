@@ -11,6 +11,10 @@ CLI for grouped 5-fold cross-validation of the three arms (see ``src/cv.py``).
     python -m src.run_cv stack --dataset twitter16 --members lexical text_long --tag text --ckpt-root <dir>
     python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 
+Every command takes ``--split story`` to use the story-held-out folds
+(``src/cv.py``) instead of the default grouped folds; those runs live under
+``<ckpt-root>/story/``.
+
 Arms: ``text`` (RoBERTa on the source tweet), ``graph`` (BiGCN) and ``fusion``
 are the stage 1 / stage 2 models with their default settings, unchanged;
 ``lexical`` is TF-IDF + logistic regression (``src/lexical.py``); ``stack`` is a
@@ -40,7 +44,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.config import DATASETS, Config
-from src.cv import Folds, build_folds_file, folds_path, paired_difference, pool_fold_results
+from src.cv import SPLITS, Folds, build_folds_file, folds_path, paired_difference, pool_fold_results
 from src.data import build_arm_view, load_dataset
 
 LOGGER = logging.getLogger("smrd.cv")
@@ -64,7 +68,7 @@ OPTIONAL_ARMS = {
     "fusion_gwo": ("fusion",),
     "lexical": ("graph", "text"),
     "stack": ("lexical", "graph"),
-    "text_long": ("lexical", "text"),
+    "text_long": ("lexical", "text", "graph"),
     # written by ``stack --members lexical text_long --tag text``
     "stack_text": ("lexical", "text_long"),
 }
@@ -90,15 +94,16 @@ def _write(path: Path, payload: Dict) -> Path:
 
 
 # ---------------------------------------------------------------------------
-def cmd_make_folds(datasets: List[str]) -> Dict:
+def cmd_make_folds(datasets: List[str], split: str = "grouped") -> Dict:
     out = {}
     for ds in datasets:
         df = load_dataset(ds)
-        payload = build_folds_file(ds, df)
-        folds = Folds.load(ds, df["tweet_id"].astype(str).tolist())
+        payload = build_folds_file(ds, df, split=split)
+        folds = Folds.load(ds, df["tweet_id"].astype(str).tolist(), split=split)
         folds.check_no_group_leak()
         out[ds] = {
-            "file": str(folds_path(ds).relative_to(ROOT)),
+            "file": str(folds_path(ds, split=split).relative_to(ROOT)),
+            "grouping": payload["grouping"],
             "fold_sizes": payload["fold_sizes"],
             "label_counts_per_fold": payload["label_counts_per_fold"],
             "groups": len(set(payload["group_of_row"])),
@@ -115,7 +120,7 @@ def cmd_train(args) -> Dict:
     df = load_dataset(dataset)
     ids = df["tweet_id"].astype(str).tolist()
     base = _base_view(dataset, task, df)
-    folds = Folds.load(dataset, ids)
+    folds = Folds.load(dataset, ids, split=getattr(args, "split", "grouped"))
     folds.check_no_group_leak()
     run_dir = _run_dir(args.ckpt_root, dataset, task, arm, args.tag)
 
@@ -287,7 +292,7 @@ def cmd_stack(args) -> Dict:
     df = load_dataset(dataset)
     ids = df["tweet_id"].astype(str).tolist()
     base = _base_view(dataset, task, df)
-    folds = Folds.load(dataset, ids)
+    folds = Folds.load(dataset, ids, split=getattr(args, "split", "grouped"))
     run_dir = _run_dir(args.ckpt_root, dataset, task, "stack", args.tag)
     config = {"members": members, "weight_steps": 10, "selection": "validation macro-F1"}
     texts = [normalize_tweet(t) for t in df["raw_text"].astype(str).tolist()]
@@ -370,13 +375,15 @@ def load_arm_results(
     return results
 
 
-def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -> Dict:
+def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None, split: str = "grouped") -> Dict:
+    """Pooled metrics and paired comparisons of the arms found under
+    ``ckpt_root`` (for ``split="story"`` that is ``<ckpt-root>/story``)."""
     from src.evaluate import test_report
 
     task = DEFAULT_TASK[dataset]
     df = load_dataset(dataset)
     base = _base_view(dataset, task, df)
-    folds = Folds.load(dataset, df["tweet_id"].astype(str).tolist())
+    folds = Folds.load(dataset, df["tweet_id"].astype(str).tolist(), split=split)
     expected = sorted(base.labels)
 
     arms, correct, missing = {}, {}, []
@@ -414,7 +421,9 @@ def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -
     out = {
         "dataset": dataset,
         "task": task,
-        "protocol": "grouped stratified 5-fold; pooled test predictions; one seed per fold",
+        "split": split,
+        "protocol": ("story-held-out" if split == "story" else "grouped")
+        + " stratified 5-fold; pooled test predictions; one seed per fold",
         "folds_sha256": folds.sha256,
         "n": len(expected),
         "majority_class_accuracy": list(base.labels.values()).count(majority) / len(expected),
@@ -422,12 +431,14 @@ def cmd_compare(dataset: str, ckpt_root: str, tuned_tag: Optional[str] = None) -
         "pairs": pairs,
         "unfinished_arms": missing,
     }
-    _write(RESULTS_DIR / f"{dataset}_{task}_comparison.json", out)
+    suffix = "" if split == "grouped" else f"_{split}"
+    _write(RESULTS_DIR / f"{dataset}_{task}_comparison{suffix}.json", out)
     return out
 
 
 def format_comparison(out: Dict) -> str:
-    lines = [f"--- {out['dataset']} ({out['task']}, n={out['n']}, "
+    split = "" if out.get("split", "grouped") == "grouped" else f"{out['split']}-held-out folds, "
+    lines = [f"--- {out['dataset']} ({split}{out['task']}, n={out['n']}, "
              f"majority class {out['majority_class_accuracy']:.3f})"]
     for arm, a in out["arms"].items():
         lo, hi = a["pooled"]["accuracy_wilson_95"]
@@ -453,6 +464,9 @@ def format_comparison(out: Dict) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Grouped 5-fold cross-validation")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--split", choices=SPLITS, default="grouped",
+                        help="fold definition (before the command): grouped = near-duplicates kept "
+                             "together (default); story = whole stories / events held out")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("make-folds", help="write data/splits/<dataset>_cv5_grouped.json")
@@ -502,8 +516,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    if args.split != "grouped" and args.command != "make-folds":
+        args.ckpt_root = str(Path(args.ckpt_root) / args.split)  # separate runs per fold definition
     if args.command == "make-folds":
-        print(json.dumps(cmd_make_folds(_datasets(args)), indent=2))
+        print(json.dumps(cmd_make_folds(_datasets(args), args.split), indent=2))
     elif args.command == "train":
         if args.max_epochs and not args.tag:
             raise SystemExit("--max-epochs changes the protocol; pass --tag so it gets its own directory")
@@ -514,7 +530,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(cmd_stack(args), indent=2))
     else:
         for ds in _datasets(args):
-            print(format_comparison(cmd_compare(ds, args.ckpt_root, args.tuned_tag)))
+            print(format_comparison(cmd_compare(ds, args.ckpt_root, args.tuned_tag, args.split)))
     return 0
 
 

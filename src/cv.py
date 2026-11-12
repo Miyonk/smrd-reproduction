@@ -20,6 +20,22 @@ Protocol
 The fold assignment is written to ``data/splits/<dataset>_cv5_grouped.json``
 and tracked in git: it is the source of truth (clusters are not recomputed at
 run time, so library versions cannot move rows between folds).
+
+Story-held-out folds (``split="story"``)
+----------------------------------------
+The grouped folds only keep near-copies together; other tweets about the same
+story still land on both sides, and a model can score by recognising the
+story.  The ``story`` split uses the same protocol with coarser groups, so
+every test fold contains only stories absent from training and validation:
+
+* PHEME: the group is the event (9 events of very unequal size, so events are
+  packed into folds by size - largest first, each into the currently smallest
+  fold - instead of being drawn at random);
+* Twitter15/16 (no event ids): average-linkage clusters of word TF-IDF vectors
+  of the source tweets, cut at cosine >= ``STORY_THRESHOLD``, merged with the
+  near-duplicate clusters.
+
+Written to ``data/splits/<dataset>_cv5_story.json``.
 """
 
 from __future__ import annotations
@@ -39,10 +55,52 @@ from src.data import ArmView
 N_FOLDS = 5
 FOLD_SEED = 42
 FORMAT_VERSION = 1
+SPLITS = ("grouped", "story")
+STORY_THRESHOLD = 0.3
 
 
-def folds_path(dataset: str, splits_dir: Path | str = SPLITS_DIR) -> Path:
-    return Path(splits_dir) / f"{dataset}_cv{N_FOLDS}_grouped.json"
+def folds_path(dataset: str, splits_dir: Path | str = SPLITS_DIR, split: str = "grouped") -> Path:
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {SPLITS}")
+    return Path(splits_dir) / f"{dataset}_cv{N_FOLDS}_{split}.json"
+
+
+def story_groups(texts: Sequence[str], dup_groups: Sequence[int], threshold: float = STORY_THRESHOLD) -> List[int]:
+    """Story id per source tweet (smallest row index of its story).
+
+    Average-linkage clustering of word TF-IDF vectors (English stop words
+    removed, URLs / mentions stripped), cut where the average cosine
+    similarity between clusters falls below ``threshold``; rows sharing a
+    near-duplicate cluster are then merged into one story."""
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    from src.dedup import match_key
+
+    n = len(texts)
+    vectors = TfidfVectorizer(sublinear_tf=True, stop_words="english").fit_transform([match_key(t) for t in texts])
+    # rows are L2-normalised, so the product is the cosine; an empty row is at distance 1 from everything
+    distance = np.clip(1.0 - (vectors @ vectors.T).toarray(), 0.0, 1.0)
+    np.fill_diagonal(distance, 0.0)
+    topic = AgglomerativeClustering(
+        n_clusters=None, metric="precomputed", linkage="average", distance_threshold=1.0 - threshold
+    ).fit_predict(distance)
+
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for key_of_row in (topic.tolist(), list(dup_groups)):
+        first: Dict[int, int] = {}
+        for i, key in enumerate(key_of_row):
+            a, b = find(first.setdefault(key, i)), find(i)
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+    return [find(i) for i in range(n)]
 
 
 def make_folds(
@@ -64,21 +122,73 @@ def make_folds(
     return fold_of_row.tolist()
 
 
-def build_folds_file(dataset: str, df, threshold: Optional[float] = None, path: Optional[Path] = None) -> Dict:
+def pack_groups(groups: Sequence[int], n_folds: int = N_FOLDS) -> List[int]:
+    """Fold id per row for a handful of large groups: groups are taken largest
+    first (ties by group id) and each goes to the currently smallest fold."""
+    sizes: Dict[int, int] = {}
+    for g in groups:
+        sizes[g] = sizes.get(g, 0) + 1
+    if len(sizes) < n_folds:
+        raise ValueError(f"{len(sizes)} groups cannot fill {n_folds} folds")
+    load = [0] * n_folds
+    fold_of_group: Dict[int, int] = {}
+    for g in sorted(sizes, key=lambda g: (-sizes[g], g)):
+        k = min(range(n_folds), key=lambda k: (load[k], k))
+        fold_of_group[g] = k
+        load[k] += sizes[g]
+    return [fold_of_group[g] for g in groups]
+
+
+def build_folds_file(
+    dataset: str,
+    df,
+    threshold: Optional[float] = None,
+    path: Optional[Path] = None,
+    split: str = "grouped",
+    story_threshold: float = STORY_THRESHOLD,
+) -> Dict:
     from src.dedup import DEFAULT_THRESHOLD, find_clusters
 
     threshold = DEFAULT_THRESHOLD if threshold is None else threshold
     labels = df["label"].astype(int).tolist()
-    groups = find_clusters(df["raw_text"].astype(str).tolist(), threshold=threshold)
-    fold_of_row = make_folds(labels, groups)
+    texts = df["raw_text"].astype(str).tolist()
+    groups = find_clusters(texts, threshold=threshold)
+    grouping = f"near-duplicate clusters, char 3-5gram TF-IDF cosine >= {threshold}"
+    extra: Dict = {}
+    stratify, packed = "label (4-class)", False
+    if split == "story":
+        events = df["event"].astype(str).tolist()
+        names = sorted(set(events))
+        if len(names) > 1:
+            dup, groups = groups, [names.index(e) for e in events]
+            grouping = (f"event ({len(names)} events); a whole event is in one fold; events packed "
+                        "into folds by size, largest first")
+            stratify, packed = "none (too few groups)", True
+            spans: Dict[int, set] = {}
+            for d, g in zip(dup, groups):
+                spans.setdefault(d, set()).add(g)
+            extra = {"events": names,
+                     "near_duplicate_clusters_spanning_events": sum(len(v) > 1 for v in spans.values())}
+        else:
+            groups = story_groups(texts, groups, story_threshold)
+            grouping = (
+                f"story clusters: average-linkage clusters of source-tweet word TF-IDF, cosine >= "
+                f"{story_threshold}, merged with near-duplicate clusters (cosine >= {threshold})"
+            )
+    elif split != "grouped":
+        raise ValueError(f"split must be one of {SPLITS}")
+    fold_of_row = pack_groups(groups) if packed else make_folds(labels, groups)
     n_classes = max(labels) + 1
     payload = {
         "format_version": FORMAT_VERSION,
         "dataset": dataset,
+        "split": split,
         "n_folds": N_FOLDS,
         "seed": FOLD_SEED,
-        "stratify": "label (4-class)",
-        "grouping": f"near-duplicate clusters, char 3-5gram TF-IDF cosine >= {threshold}",
+        "stratify": stratify,
+        "grouping": grouping,
+        "n_groups": len(set(groups)),
+        **extra,
         "protocol": "test = fold k, val = fold (k+1) % n_folds, train = the rest",
         "fold_sizes": [fold_of_row.count(k) for k in range(N_FOLDS)],
         "label_counts_per_fold": [
@@ -89,7 +199,7 @@ def build_folds_file(dataset: str, df, threshold: Optional[float] = None, path: 
         "group_of_row": [int(g) for g in groups],
         "fold_of_row": fold_of_row,
     }
-    path = Path(path or folds_path(dataset))
+    path = Path(path or folds_path(dataset, split=split))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
     return payload
@@ -102,21 +212,26 @@ class Folds:
     group_of_row: List[int]
     n_folds: int
     sha256: str
+    split: str = "grouped"
 
     @classmethod
-    def load(cls, dataset: str, tweet_ids: Sequence[str], path: Optional[Path] = None) -> "Folds":
-        path = Path(path or folds_path(dataset))
+    def load(
+        cls, dataset: str, tweet_ids: Sequence[str], path: Optional[Path] = None, split: str = "grouped"
+    ) -> "Folds":
+        path = Path(path or folds_path(dataset, split=split))
         if not path.exists():
             raise FileNotFoundError(f"{path} not found; build it with `python -m src.run_cv make-folds`")
         raw_bytes = path.read_bytes()
         raw = json.loads(raw_bytes)
         if raw.get("format_version") != FORMAT_VERSION or raw.get("dataset") != dataset:
             raise ValueError(f"{path} is not a v{FORMAT_VERSION} fold file for {dataset}")
+        if raw.get("split", "grouped") != split:
+            raise ValueError(f"{path} is not a {split!r} fold file")
         if [str(t) for t in tweet_ids] != raw["tweet_ids"]:
             raise ValueError(f"{path} does not match the dataset rows (tweet ids differ)")
         # hash the parsed assignment, not the bytes: immune to line-ending conversion
         digest = hashlib.sha256(json.dumps(raw["fold_of_row"]).encode()).hexdigest()
-        return cls(dataset, list(raw["fold_of_row"]), list(raw["group_of_row"]), int(raw["n_folds"]), digest)
+        return cls(dataset, list(raw["fold_of_row"]), list(raw["group_of_row"]), int(raw["n_folds"]), digest, split)
 
     def rows(self, fold: int) -> List[int]:
         return [i for i, f in enumerate(self.fold_of_row) if f == fold]
@@ -146,7 +261,7 @@ class Folds:
 
     def split_source(self, fold: int) -> str:
         return (
-            f"{folds_path(self.dataset).name} fold {fold} "
+            f"{folds_path(self.dataset, split=self.split).name} fold {fold} "
             f"(val fold {(fold + 1) % self.n_folds}; folds sha256 {self.sha256[:16]})"
         )
 

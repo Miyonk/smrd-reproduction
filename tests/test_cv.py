@@ -169,3 +169,96 @@ def test_compare_end_to_end(tmp_path):
     bad.write_text(json.dumps(r))
     with pytest.raises(RuntimeError):
         cmd_compare("twitter16", str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Story-held-out folds
+# ---------------------------------------------------------------------------
+def test_story_groups_merge_related_tweets_and_near_duplicates():
+    from src.cv import story_groups
+
+    texts = [
+        "soldier shot at the war memorial in ottawa",
+        "ottawa war memorial shooting: soldier shot by gunman",
+        "new banksy mural appears overnight in bristol",
+        "banksy mural in bristol appears overnight, council confirms",
+        "airline denies plane crash rumour over the alps",
+        "",
+    ]
+    groups = story_groups(texts, list(range(6)), threshold=0.3)
+    assert groups[0] == groups[1] and groups[2] == groups[3]
+    assert len({groups[0], groups[2], groups[4], groups[5]}) == 4
+    assert groups == [min(i for i, g in enumerate(groups) if g == h) for h in groups]  # id = first row
+    # rows that share a near-duplicate cluster end up in one story whatever their text
+    merged = story_groups(texts, [0, 1, 2, 3, 0, 5], threshold=0.3)
+    assert merged[4] == merged[0] == merged[1] and merged[2] != merged[0]
+    # a stricter threshold never merges more
+    assert len(set(story_groups(texts, list(range(6)), threshold=0.9))) >= len(set(groups))
+
+
+def test_pack_groups_balances_a_few_large_groups():
+    from src.cv import pack_groups
+
+    groups = [0] * 20 + [1] * 12 + [2] * 11 + [3] * 9 + [4] * 5 + [5] * 2 + [6] * 2 + [7] * 1
+    fold = pack_groups(groups)
+    assert sorted(set(fold)) == [0, 1, 2, 3, 4]
+    assert len({(g, f) for g, f in zip(groups, fold)}) == 8  # each group in exactly one fold
+    sizes = [fold.count(k) for k in range(5)]
+    assert sizes == [20, 12, 11, 10, 9]
+    assert pack_groups(groups) == fold
+    with pytest.raises(ValueError):
+        pack_groups([0, 0, 1, 2])
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_committed_story_fold_files_are_valid(dataset):
+    from src.cv import folds_path
+
+    df = load_dataset(dataset)
+    ids = df["tweet_id"].astype(str).tolist()
+    story = Folds.load(dataset, ids, split="story")
+    story.check_no_group_leak()
+    assert len(story.fold_of_row) == len(df) and set(story.fold_of_row) == set(range(5))
+    assert "_cv5_story.json" in story.split_source(0)
+    grouped = Folds.load(dataset, ids)
+    assert "_cv5_grouped.json" in grouped.split_source(0)
+    # stories are coarser than near-duplicate clusters: near-copies still share a fold
+    fold_of_dup = {}
+    for g, f in zip(grouped.group_of_row, story.fold_of_row):
+        assert fold_of_dup.setdefault(g, f) == f
+    assert len(set(story.group_of_row)) < len(set(grouped.group_of_row))
+    events = df["event"].astype(str).tolist()
+    if len(set(events)) > 1:  # PHEME: a whole event is in one fold
+        assert len({(e, f) for e, f in zip(events, story.fold_of_row)}) == len(set(events))
+    # a fold file is only accepted as the split it was built for
+    with pytest.raises(ValueError):
+        Folds.load(dataset, ids, path=folds_path(dataset, split="story"))
+    with pytest.raises(ValueError):
+        Folds.load(dataset, ids, path=folds_path(dataset), split="story")
+
+
+def test_story_runs_are_kept_apart_from_grouped_runs(tmp_path, monkeypatch):
+    import src.run_cv as run_cv
+
+    monkeypatch.setattr(run_cv, "RESULTS_DIR", tmp_path / "results")
+    seen = {}
+    monkeypatch.setattr(run_cv, "cmd_train", lambda args: seen.update(root=args.ckpt_root, split=args.split) or {})
+    run_cv.main(["--split", "story", "train", "--dataset", "twitter16", "--arm", "lexical",
+                 "--ckpt-root", str(tmp_path / "ckpt")])
+    assert seen == {"root": str(tmp_path / "ckpt" / "story"), "split": "story"}
+    run_cv.main(["train", "--dataset", "twitter16", "--arm", "lexical", "--ckpt-root", str(tmp_path / "ckpt")])
+    assert seen == {"root": str(tmp_path / "ckpt"), "split": "grouped"}
+
+    out = run_cv.cmd_compare("twitter16", str(tmp_path / "ckpt" / "story"), split="story")
+    assert out["split"] == "story" and out["arms"] == {}
+    assert (tmp_path / "results" / "twitter16_4way_comparison_story.json").exists()
+    assert "story-held-out folds" in run_cv.format_comparison(out)
+    # a grouped-fold result is refused under the story folds
+    df = load_dataset("twitter16")
+    grouped = Folds.load("twitter16", df["tweet_id"].astype(str).tolist())
+    for k in range(5):
+        d = tmp_path / "ckpt" / "story" / "twitter16_4way_lexical" / f"fold{k}"
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({"split": {"source": grouped.split_source(k)}}))
+    with pytest.raises(RuntimeError):
+        run_cv.cmd_compare("twitter16", str(tmp_path / "ckpt" / "story"), split="story")

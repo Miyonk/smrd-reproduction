@@ -209,7 +209,65 @@ python -m src.run_cv compare --dataset twitter16 --ckpt-root <dir>
 `--light` keeps only `result.json` and `probs.json` per fold (validation and test class
 probabilities of the best epoch): no saved model and no per-epoch checkpoint, so an
 interrupted fold starts again. `notebooks/colab_text_long.ipynb` runs all of this from
-an empty Drive (T4 GPU). Not yet run.
+an empty Drive (T4 GPU).
+
+Result on Twitter16 (Colab, pooled accuracy on the 5 folds): `text_long` 0.784
+[0.754, 0.810], up from 0.688 [0.656, 0.719] for the 6-epoch model (separate runs, so
+no paired test), but still 6.5 points below the lexical arm (0.848, McNemar
+p < 0.0001). `stack_text` 0.856; `stack_text − lexical` +0.7 points [−0.7, +2.2],
+p = 0.42 (22 tweets only the stack gets right, 16 only the lexical arm). Longer training
+fixes most of the text arm's deficit, but the stack is not measurably better than the
+lexical arm alone. Not run on Twitter15 or PHEME.
+
+## Story-held-out evaluation (branch `story-eval`)
+
+The grouped folds keep near-copies of a tweet together, but other tweets about the same
+story still fall on both sides of a split. The `story` split uses the same 5-fold
+protocol (60% train / 20% validation / 20% test, validation for model selection only)
+with coarser groups, so each test fold holds only stories absent from training and
+validation:
+
+- **PHEME:** the group is the event. The 9 events are packed into 5 folds by size
+  (Charlie Hebdo; Sydney siege; Ferguson; Ottawa + Gurlitt; the four smallest).
+- **Twitter15/16:** there are no event ids, so source tweets are clustered by text
+  (average-linkage on word TF-IDF, cosine ≥ 0.3) and merged with the near-duplicate
+  clusters: 498 stories on Twitter16, 828 on Twitter15.
+
+Fold files: `data/splits/<dataset>_cv5_story.json`. Every `run_cv` command takes
+`--split story` before the command name; those runs are stored under
+`<ckpt-root>/story/`.
+
+```bash
+python -m src.run_cv --split story train --dataset twitter16 --arm lexical --ckpt-root <dir>
+python -m src.run_cv --split story compare --dataset twitter16 --ckpt-root <dir>
+python scripts/story_threshold_sensitivity.py
+```
+
+Lexical arm, pooled accuracy (local CPU run, scikit-learn 1.5):
+
+| | Twitter16 | Twitter15 | PHEME |
+|---|---|---|---|
+| grouped folds | 0.848 | 0.840 | 0.871 |
+| story-held-out folds | 0.683 | 0.686 | 0.701 |
+| majority class | 0.253 | 0.251 | 0.626 |
+
+On PHEME the story-held-out model is close to the majority class within each event
+(Charlie Hebdo 0.811 vs 0.780, Ferguson 0.760 vs 0.752), and on the fold of the four
+smallest events it is below it (0.423 vs 0.637); macro-F1 is 0.635.
+
+On Twitter15/16 the number depends on how coarsely stories are defined, and it falls
+steadily with no plateau, so 0.68 is one point on a curve and not a fixed property of
+the model:
+
+| story threshold (cosine ≥) | 0.5 | 0.4 | 0.3 | 0.2 | 0.1 |
+|---|---|---|---|---|---|
+| Twitter16 stories | 633 | 570 | 498 | 393 | 234 |
+| Twitter16 lexical accuracy | 0.793 | 0.758 | 0.683 | 0.661 | 0.506 |
+| Twitter15 stories | 1118 | 978 | 828 | 648 | 373 |
+| Twitter15 lexical accuracy | 0.785 | 0.743 | 0.686 | 0.595 | 0.548 |
+
+Only the lexical arm has been run on these folds. `notebooks/colab_story.ipynb` runs
+BiGCN and the longer-trained RoBERTa on them (T4 GPU, empty Drive is fine).
 
 ---
 
